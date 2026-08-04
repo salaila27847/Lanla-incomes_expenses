@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 from rapidfuzz import fuzz, process
 
@@ -19,10 +19,12 @@ async def match_master_item(payload: MatchRequest) -> dict:
     Returns matched=False (instead of a low-confidence guess) when the
     best score is below MATCH_CONFIDENCE_THRESHOLD, so the frontend can
     prompt the user to pick the master item manually instead of the
-    receipt line silently getting mistagged.
+    receipt line silently getting mistagged. An empty candidate list
+    (e.g. a brand-new install with no master items yet) is a normal
+    "no match" rather than an error.
     """
     if not payload.candidate_master_items:
-        raise HTTPException(status_code=400, detail="candidate_master_items must not be empty")
+        return {"matched": False, "master_item_name": None, "score": 0}
 
     best = process.extractOne(
         payload.raw_text,

@@ -16,7 +16,12 @@ Monorepo with three independently deployable services, no shared build tooling b
 
 **Data flow:** PWA → `/controller` (auth to Sheets via service account) → `/backend` for OCR/matching/QR → back to `/controller` → write result to Sheets → back to PWA. This replaces the Apps-Script-based controller in `SPEC.md`'s original diagram with a Node.js service; Google Sheets itself is still the database. See the "Implementation notes" at the top of `SPEC.md` for why.
 
-**Current state:** `/backend`'s OCR (`app/routers/ocr.py`) and fuzzy matching (`app/routers/match.py`) are implemented for real — OCR via Typhoon OCR's OpenAI-compatible API, matching via `rapidfuzz`. OCR defaults to `OCR_MOCK_MODE=true` (returns a canned fixture from `app/fixtures/sample_receipt.py`) since no `TYPHOON_API_KEY` or real receipt photos exist yet; flip it off once you have a key. QR generation, the `/controller`'s Google Sheets read/write, and the full upload → OCR → match → review → Sheets-write pipeline are still `501 Not Implemented` stubs with `TODO` comments.
+**Current state:** the full scan → review → save loop for feature #1 (Split-Bill OCR + Master Item Matching) works end-to-end:
+- `/backend`'s OCR (`app/routers/ocr.py`) and fuzzy matching (`app/routers/match.py`) are real — OCR via Typhoon OCR's OpenAI-compatible API, matching via `rapidfuzz`. OCR defaults to `OCR_MOCK_MODE=true` (returns a canned fixture from `app/fixtures/sample_receipt.py`) since no `TYPHOON_API_KEY` or real receipt photos exist yet.
+- `/controller`'s Sheets client (`src/sheets/client.ts`) and its `/receipt/scan` + `/receipt/confirm` routes are real. Defaults to `SHEETS_MOCK_MODE=true` (an in-memory list stands in for the `MasterItems`/`PriceHistory` sheet tabs) since no Google Sheet or service account exists yet — see `SETUP.md` for that one-time manual setup.
+- `/frontend`'s `ReceiptReview` page calls both endpoints for real: scan a receipt, review/re-categorize, name any unmatched item, save.
+
+Still stubbed: QR generation (`/backend/app/routers/qr.py`), and the `/controller` routes for `prices`, `budget`, and `qr` (price-history lookup, budget/must-pay, savings QR — features #2-4 in `SPEC.md`).
 
 ## Commands
 
@@ -42,6 +47,6 @@ pip install -r requirements.txt
 uvicorn main:app --reload   # local dev, all routes under one server on :8000
 ```
 
-Each service has its own `.env.example` — copy to `.env` and fill in before running.
+Each service has its own `.env.example` — copy to `.env` and fill in before running. For `/controller`, see `SETUP.md` for the one-time Google Sheet + service-account setup needed before turning off `SHEETS_MOCK_MODE`.
 
 There is no test suite, linter, or CI configured yet in any of the three services.

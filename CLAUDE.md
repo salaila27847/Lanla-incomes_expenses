@@ -38,15 +38,26 @@ npm install
 npm run dev       # tsx watch, Express on :3001 (PORT env var)
 npm run build      # tsc -> dist/
 npm start          # run the built dist/index.js
+npm test           # vitest run
 ```
 
 Backend (`/backend`):
 ```
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # requirements.txt + pytest
 uvicorn main:app --reload   # local dev, all routes under one server on :8000
+pytest                      # test suite
 ```
 
 Each service has its own `.env.example` — copy to `.env` and fill in before running. For `/controller`, see `SETUP.md` for the one-time Google Sheet + service-account setup needed before turning off `SHEETS_MOCK_MODE`. To host all three on Vercel's free tier instead of running locally, see `DEPLOY.md`.
 
-There is no test suite, linter, or CI configured yet in any of the three services.
+## Tests
+
+`/backend` (pytest) and `/controller` (vitest + supertest) have suites; `/frontend` does not yet, and there is no linter or CI in any of the three.
+
+Both suites run fully offline — the backend fakes Typhoon with `httpx.MockTransport` (see the `typhoon` fixture in `backend/tests/conftest.py`), and the controller runs the Sheets client in `SHEETS_MOCK_MODE` and stubs `fetch` for backend calls. No API keys or network access needed.
+
+Two things worth knowing before adding tests:
+
+- **Config is captured at import time.** `app/config.py` reads `os.environ` once, and the routers import those values *by value*, so changing the environment mid-test does nothing — patch the attribute on the router module (`monkeypatch.setattr(ocr_router, "OCR_MOCK_MODE", False)`) or reload `app.config`. The controller's Sheets client is the same: `vi.resetModules()` then re-import. Its in-memory tabs are module-level too, so a re-import is also how a test gets a clean database.
+- **Prefer anchors the implementation can't move.** `test_promptpay.py` checks a payload published by the reference implementation and the universal CRC-16/CCITT-FALSE check value (`"123456789"` → `0x29B1`), rather than whatever our own builder currently emits.

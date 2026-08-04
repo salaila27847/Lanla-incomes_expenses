@@ -1,12 +1,19 @@
 import os
 
 
-# Vercel's env var UI (especially on mobile, via autocomplete/copy-paste)
-# can silently prepend/append whitespace or tab characters, which breaks
-# strict parsers like httpx's URL parser. Stripping every value here means
-# a stray character in the dashboard can't take the API down.
+# Every value here comes from a hosting dashboard, which makes two things
+# routine that a .env file makes rare:
+#
+# - Pasted values pick up stray whitespace or tab characters. A leading
+#   tab on TYPHOON_BASE_URL broke httpx's URL parser on every scan while
+#   looking perfectly correct in the UI.
+# - A variable gets created but left blank. `os.environ.get(name, default)`
+#   returns "" for those, not the default, so a blank
+#   MATCH_CONFIDENCE_THRESHOLD used to crash the app at import.
+#
+# Stripping and treating blank as absent makes both harmless.
 def _env(name: str, default: str = "") -> str:
-    return os.environ.get(name, default).strip()
+    return os.environ.get(name, "").strip() or default
 
 
 TYPHOON_API_KEY = _env("TYPHOON_API_KEY")

@@ -1,0 +1,306 @@
+/**
+ * The Sheets client is the only thing that touches the database, and it
+ * has two very different modes: an in-memory stand-in (SHEETS_MOCK_MODE,
+ * the default so the app runs before a real Sheet exists) and the real
+ * Sheets API. Both need to agree on the shapes they return, or the app
+ * behaves differently in mock mode than in production.
+ *
+ * SHEETS_MOCK_MODE and the in-memory tabs are captured at module scope,
+ * so every test re-imports the module with the environment it wants.
+ */
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+async function loadClient(env: Record<string, string> = {}) {
+  vi.resetModules();
+  vi.stubEnv("SHEETS_MOCK_MODE", env.SHEETS_MOCK_MODE ?? "true");
+  vi.stubEnv("SHEETS_SPREADSHEET_ID", env.SHEETS_SPREADSHEET_ID ?? "");
+  return import("../src/sheets/client");
+}
+
+beforeEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
+
+describe("mock mode", () => {
+  it("starts empty so a fresh install has no phantom data", async () => {
+    const client = await loadClient();
+
+    expect(await client.readMasterItems()).toEqual([]);
+    expect(await client.readPriceHistory()).toEqual([]);
+    expect(await client.readMustPayItems()).toEqual([]);
+  });
+
+  it("reads back what it wrote", async () => {
+    const client = await loadClient();
+
+    await client.appendMasterItem("นมสด UHT 250ml", "food");
+    await client.appendPriceHistoryRow({
+      date: "2026-08-04",
+      store: "7-Eleven",
+      masterItemName: "นมสด UHT 250ml",
+      category: "food",
+      price: 15,
+    });
+
+    expect(await client.readMasterItems()).toEqual([
+      { name: "นมสด UHT 250ml", category: "food" },
+    ]);
+    expect(await client.readPriceHistory()).toEqual([
+      {
+        date: "2026-08-04",
+        store: "7-Eleven",
+        masterItemName: "นมสด UHT 250ml",
+        category: "food",
+        price: 15,
+      },
+    ]);
+  });
+
+  it("does not leak state between module loads", async () => {
+    const first = await loadClient();
+    await first.appendMasterItem("ขนมปัง", "food");
+    expect(await first.readMasterItems()).toHaveLength(1);
+
+    const second = await loadClient();
+    expect(await second.readMasterItems()).toEqual([]);
+  });
+
+  it("never calls the Sheets API", async () => {
+    // Mock mode exists so the app runs with no credentials at all; if it
+    // reached the API it would throw on auth instead of working offline.
+    const { google } = await import("googleapis");
+    const spy = vi.spyOn(google, "sheets");
+
+    const client = await loadClient();
+    await client.appendMasterItem("มาม่า", "food");
+    await client.readMasterItems();
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("must-pay items in mock mode", () => {
+  it("assigns an id and starts unpaid", async () => {
+    const client = await loadClient();
+
+    const item = await client.appendMustPayItem({
+      name: "ค่าไฟ",
+      amount: 1200,
+      month: "2026-08",
+    });
+
+    expect(item.id).toBeTruthy();
+    expect(item.status).toBe("unpaid");
+    expect(item.paidAt).toBeNull();
+  });
+
+  it("gives each item a distinct id", async () => {
+    const client = await loadClient();
+
+    const a = await client.appendMustPayItem({ name: "ค่าไฟ", amount: 1, month: "2026-08" });
+    const b = await client.appendMustPayItem({ name: "ค่าไฟ", amount: 1, month: "2026-08" });
+
+    // Same name and amount every month -- the id is what mark-paid targets.
+    expect(a.id).not.toBe(b.id);
+  });
+
+  it("marks an item paid and timestamps it", async () => {
+    const client = await loadClient();
+    const item = await client.appendMustPayItem({
+      name: "ค่าน้ำ",
+      amount: 300,
+      month: "2026-08",
+    });
+
+    await client.updateMustPayStatus(item.id, "paid");
+
+    const [stored] = await client.readMustPayItems();
+    expect(stored.status).toBe("paid");
+    expect(stored.paidAt).not.toBeNull();
+  });
+
+  it("ignores an unknown id rather than throwing", async () => {
+    const client = await loadClient();
+
+    await expect(client.updateMustPayStatus("no-such-id", "paid")).resolves.not.toThrow();
+  });
+});
+
+describe("real mode row mapping", () => {
+  /** Stub googleapis so we can assert on ranges and row parsing. */
+  async function loadWithFakeSheets(rowsByRange: Record<string, unknown[][]>) {
+    const calls: { get: string[]; append: { range: string; values: unknown[] }[] } = {
+      get: [],
+      append: [],
+    };
+    const { google } = await import("googleapis");
+    vi.spyOn(google, "sheets").mockReturnValue({
+      spreadsheets: {
+        values: {
+          get: async ({ range }: { range: string }) => {
+            calls.get.push(range);
+            return { data: { values: rowsByRange[range] ?? [] } };
+          },
+          append: async ({ range, requestBody }: any) => {
+            calls.append.push({ range, values: requestBody.values[0] });
+            return {};
+          },
+          update: async () => ({}),
+        },
+      },
+    } as any);
+
+    const client = await loadClient({
+      SHEETS_MOCK_MODE: "false",
+      SHEETS_SPREADSHEET_ID: "sheet-123",
+    });
+    return { client, calls };
+  }
+
+  it("skips the header row when reading", async () => {
+    const { client, calls } = await loadWithFakeSheets({});
+
+    await client.readMasterItems();
+
+    // A2, not A1 -- starting at A1 would ingest the column headings as data.
+    expect(calls.get[0]).toBe("MasterItems!A2:B");
+  });
+
+  it("parses master items and defaults an unknown category to food", async () => {
+    const { client } = await loadWithFakeSheets({
+      "MasterItems!A2:B": [
+        ["นมสด", "food"],
+        ["สบู่", "goods"],
+        ["ของแปลก", "typo-category"],
+      ],
+    });
+
+    expect(await client.readMasterItems()).toEqual([
+      { name: "นมสด", category: "food" },
+      { name: "สบู่", category: "goods" },
+      { name: "ของแปลก", category: "food" },
+    ]);
+  });
+
+  it("drops rows with no name", async () => {
+    // Trailing blank rows are normal in a hand-edited sheet.
+    const { client } = await loadWithFakeSheets({
+      "MasterItems!A2:B": [["นมสด", "food"], ["", ""], [], ["สบู่", "goods"]],
+    });
+
+    expect(await client.readMasterItems()).toHaveLength(2);
+  });
+
+  it("reads a blank store as null rather than an empty string", async () => {
+    const { client } = await loadWithFakeSheets({
+      "PriceHistory!A2:E": [["2026-08-04", "", "นมสด", "food", "15"]],
+    });
+
+    const [row] = await client.readPriceHistory();
+    expect(row.store).toBeNull();
+    expect(row.price).toBe(15); // sheet cells arrive as strings
+  });
+
+  it("writes a missing store as an empty cell", async () => {
+    const { client, calls } = await loadWithFakeSheets({});
+
+    await client.appendPriceHistoryRow({
+      date: "2026-08-04",
+      store: null,
+      masterItemName: "นมสด",
+      category: "food",
+      price: 15,
+    });
+
+    expect(calls.append[0].values).toEqual(["2026-08-04", "", "นมสด", "food", 15]);
+  });
+
+  it("parses must-pay rows including the paid timestamp", async () => {
+    const { client } = await loadWithFakeSheets({
+      "MustPay!A2:F": [
+        ["id-1", "ค่าไฟ", "1200", "2026-08", "paid", "2026-08-04T10:00:00Z"],
+        ["id-2", "ค่าน้ำ", "300", "2026-08", "unpaid", ""],
+      ],
+    });
+
+    expect(await client.readMustPayItems()).toEqual([
+      {
+        id: "id-1",
+        name: "ค่าไฟ",
+        amount: 1200,
+        month: "2026-08",
+        status: "paid",
+        paidAt: "2026-08-04T10:00:00Z",
+      },
+      {
+        id: "id-2",
+        name: "ค่าน้ำ",
+        amount: 300,
+        month: "2026-08",
+        status: "unpaid",
+        paidAt: null,
+      },
+    ]);
+  });
+});
+
+describe("environment handling", () => {
+  it("trims the spreadsheet id", async () => {
+    // Dashboard paste picks up stray whitespace; an untrimmed id produced
+    // an opaque failure in production once already.
+    const { google } = await import("googleapis");
+    let seenId = "";
+    vi.spyOn(google, "sheets").mockReturnValue({
+      spreadsheets: {
+        values: {
+          get: async ({ spreadsheetId }: { spreadsheetId: string }) => {
+            seenId = spreadsheetId;
+            return { data: { values: [] } };
+          },
+        },
+      },
+    } as any);
+
+    const client = await loadClient({
+      SHEETS_MOCK_MODE: "false",
+      SHEETS_SPREADSHEET_ID: "  sheet-123\n",
+    });
+    await client.readMasterItems();
+
+    expect(seenId).toBe("sheet-123");
+  });
+
+  it.each([
+    ["unset", undefined],
+    ["blank", ""],
+    ["whitespace only", "   "],
+  ])("stays in mock mode when the flag is %s", async (_label, value) => {
+    // A variable created in a dashboard but left blank is not the same as
+    // "false". `?? "true"` keeps the empty string, which read as "not
+    // true" and pointed the app at the real Sheets API with no
+    // credentials -- the failure mode is a 500 on every request.
+    vi.resetModules();
+    vi.stubEnv("SHEETS_MOCK_MODE", value as string);
+    const { google } = await import("googleapis");
+    const spy = vi.spyOn(google, "sheets");
+
+    const client = await import("../src/sheets/client");
+    await client.readMasterItems();
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("still honours an explicit false", async () => {
+    // The safety net above must not make it impossible to leave mock mode.
+    const { google } = await import("googleapis");
+    const spy = vi.spyOn(google, "sheets").mockReturnValue({
+      spreadsheets: { values: { get: async () => ({ data: { values: [] } }) } },
+    } as any);
+
+    const client = await loadClient({ SHEETS_MOCK_MODE: "false" });
+    await client.readMasterItems();
+
+    expect(spy).toHaveBeenCalled();
+  });
+});

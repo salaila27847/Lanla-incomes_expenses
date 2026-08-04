@@ -19,6 +19,10 @@ __pycache__/
 .venv/
 venv/
 
+# Test artifacts
+.pytest_cache/
+coverage/
+
 # Service-account keys (never commit these)
 *-service-account.json
 *.serviceaccount.json

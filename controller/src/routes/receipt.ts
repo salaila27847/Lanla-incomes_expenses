@@ -1,5 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
+import { env } from "../env";
 import {
   appendMasterItem,
   appendPriceHistoryRow,
@@ -10,7 +11,7 @@ import {
 export const receiptRouter = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
-const PYTHON_BACKEND_URL = (process.env.PYTHON_BACKEND_URL ?? "http://localhost:8000").trim();
+const PYTHON_BACKEND_URL = env("PYTHON_BACKEND_URL", "http://localhost:8000");
 
 interface OcrItem {
   id: string;

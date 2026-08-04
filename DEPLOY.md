@@ -10,7 +10,7 @@ Before starting: finish `SETUP.md` (the Google Sheet + service account) first, a
 
 1. On [vercel.com](https://vercel.com), sign up free, then **Add New → Project → Import** this GitHub repo.
 2. Under **Root Directory**, select `backend`.
-3. Framework preset: Other (Vercel auto-detects `backend/vercel.json` and `backend/api/*.py`).
+3. Framework preset: Other (Vercel auto-detects `backend/vercel.json` and `backend/api/index.py`).
 4. Add these Environment Variables (values from `backend/.env.example`):
    - `TYPHOON_API_KEY`, `TYPHOON_BASE_URL`, `TYPHOON_OCR_MODEL`
    - `OCR_MOCK_MODE` (`true` if you don't have a Typhoon key yet)

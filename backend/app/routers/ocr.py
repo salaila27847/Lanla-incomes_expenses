@@ -27,13 +27,21 @@ STRUCTURE_PROMPT_PREFIX = (
 )
 
 
-async def _log_available_models(http_client: httpx.AsyncClient, headers: dict) -> None:
-    """Dump the model IDs this key can actually reach.
+async def _log_diagnostics(http_client: httpx.AsyncClient, headers: dict) -> None:
+    """On a failed Typhoon call, dump the config and the reachable model IDs.
 
     Which models an account can see is the one thing that can't be checked
     from the code or the docs -- it varies per key -- so a "Model not found"
-    otherwise costs a guess-and-redeploy cycle per candidate name.
+    otherwise costs a guess-and-redeploy cycle per candidate name. Only the
+    key's length and last 4 chars are logged, never the key itself; that's
+    enough to tell "wrong/stale key" apart from "wrong model".
     """
+    print(
+        f"[ocr] base_url={TYPHOON_BASE_URL!r} ocr_model={TYPHOON_OCR_MODEL!r} "
+        f"text_model={TYPHOON_TEXT_MODEL!r} key_len={len(TYPHOON_API_KEY)} "
+        f"key_suffix={TYPHOON_API_KEY[-4:]!r}"
+    )
+
     response = None
     try:
         response = await http_client.get(f"{TYPHOON_BASE_URL}/models", headers=headers)
@@ -71,14 +79,6 @@ async def scan_receipt(image: UploadFile = File(...)) -> dict:
             detail="TYPHOON_API_KEY is not set and OCR_MOCK_MODE is off",
         )
 
-    # Never log the key itself -- length + last 4 chars is enough to tell
-    # "wrong/stale key" apart from "wrong model" without leaking the secret.
-    print(
-        f"[ocr] base_url={TYPHOON_BASE_URL!r} ocr_model={TYPHOON_OCR_MODEL!r} "
-        f"text_model={TYPHOON_TEXT_MODEL!r} key_len={len(TYPHOON_API_KEY)} "
-        f"key_suffix={TYPHOON_API_KEY[-4:]!r}"
-    )
-
     content_type = image.content_type or "image/jpeg"
     auth_headers = {"Authorization": f"Bearer {TYPHOON_API_KEY}"}
 
@@ -104,7 +104,7 @@ async def scan_receipt(image: UploadFile = File(...)) -> dict:
             # status code to the PWA, not this detail -- Vercel logs are the
             # only place the actual Typhoon error body is visible.
             print(f"[ocr] OCR call failed: {ocr_response.status_code} {ocr_response.text}")
-            await _log_available_models(http_client, auth_headers)
+            await _log_diagnostics(http_client, auth_headers)
             raise HTTPException(
                 status_code=502,
                 detail=f"Typhoon OCR returned {ocr_response.status_code}: {ocr_response.text}",
@@ -138,7 +138,7 @@ async def scan_receipt(image: UploadFile = File(...)) -> dict:
                 f"[ocr] structuring call failed: {structure_response.status_code} "
                 f"{structure_response.text}"
             )
-            await _log_available_models(http_client, auth_headers)
+            await _log_diagnostics(http_client, auth_headers)
             raise HTTPException(
                 status_code=502,
                 detail=f"Typhoon structuring call returned {structure_response.status_code}: "

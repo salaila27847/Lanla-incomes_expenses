@@ -17,7 +17,7 @@ TYPHOON_BASE_URL = _env("TYPHOON_BASE_URL", "https://api.opentyphoon.ai/v1")
 # returns raw OCR text, so a second, regular chat model turns that into our
 # {store, purchased_at, items} schema.
 TYPHOON_OCR_MODEL = _env("TYPHOON_OCR_MODEL", "typhoon-ocr")
-TYPHOON_TEXT_MODEL = _env("TYPHOON_TEXT_MODEL", "typhoon-v2.1-12b-instruct")
+TYPHOON_TEXT_MODEL = _env("TYPHOON_TEXT_MODEL", "typhoon-v2.5-30b-a3b-instruct")
 
 OCR_MOCK_MODE = _env("OCR_MOCK_MODE", "true").lower() == "true"
 

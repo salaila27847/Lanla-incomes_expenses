@@ -47,6 +47,6 @@ pip install -r requirements.txt
 uvicorn main:app --reload   # local dev, all routes under one server on :8000
 ```
 
-Each service has its own `.env.example` — copy to `.env` and fill in before running. For `/controller`, see `SETUP.md` for the one-time Google Sheet + service-account setup needed before turning off `SHEETS_MOCK_MODE`.
+Each service has its own `.env.example` — copy to `.env` and fill in before running. For `/controller`, see `SETUP.md` for the one-time Google Sheet + service-account setup needed before turning off `SHEETS_MOCK_MODE`. To host all three on Vercel's free tier instead of running locally, see `DEPLOY.md`.
 
 There is no test suite, linter, or CI configured yet in any of the three services.

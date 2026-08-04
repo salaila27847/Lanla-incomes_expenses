@@ -8,11 +8,22 @@ const MOCK_MODE = (process.env.SHEETS_MOCK_MODE ?? "true").toLowerCase() === "tr
 // a service account authenticated against the Sheets API. See SETUP.md
 // for creating one, enabling the Sheets API, and sharing the target
 // Sheet with the service account's email.
+//
+// GOOGLE_SERVICE_ACCOUNT_KEY_JSON (the key file's contents, as one env
+// var) takes priority over GOOGLE_SERVICE_ACCOUNT_KEY_PATH (a local file
+// path) — serverless hosts like Vercel have no on-disk key file to point
+// at, since it's gitignored, so production deployments use the JSON var
+// while local dev can keep using the file path. See DEPLOY.md.
 function getSheetsClient() {
-  const auth = new google.auth.GoogleAuth({
-    keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-  });
+  const keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON;
+  const auth = new google.auth.GoogleAuth(
+    keyJson
+      ? { credentials: JSON.parse(keyJson), scopes: ["https://www.googleapis.com/auth/spreadsheets"] }
+      : {
+          keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH,
+          scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+        },
+  );
   return google.sheets({ version: "v4", auth });
 }
 

@@ -10,7 +10,7 @@ import {
 export const receiptRouter = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
-const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL ?? "http://localhost:8000";
+const PYTHON_BACKEND_URL = (process.env.PYTHON_BACKEND_URL ?? "http://localhost:8000").trim();
 
 interface OcrItem {
   id: string;

@@ -1,10 +1,40 @@
 import { Router } from "express";
+import { readMasterItems, readPriceHistory } from "../sheets/client";
 
 export const pricesRouter = Router();
 
-pricesRouter.get("/", async (_req, res) => {
-  // TODO: readRange("PriceHistory!A:D"), filter rows by the `item` query
-  // param (fuzzy or exact match on master item name), and group results
-  // by store for the PWA's timeline view.
-  res.status(501).json({ error: "Price history lookup not implemented yet" });
+const NO_STORE_LABEL = "ไม่ระบุร้าน";
+
+pricesRouter.get("/", async (req, res) => {
+  const item = typeof req.query.item === "string" ? req.query.item.trim() : "";
+  if (!item) {
+    res.json({ query: "", groups: [] });
+    return;
+  }
+
+  const needle = item.toLowerCase();
+  const matches = (await readPriceHistory()).filter((row) =>
+    row.masterItemName.toLowerCase().includes(needle),
+  );
+
+  const byStore = new Map<string, { masterItemName: string; price: number; date: string }[]>();
+  for (const row of matches) {
+    const store = row.store ?? NO_STORE_LABEL;
+    const entries = byStore.get(store) ?? [];
+    entries.push({ masterItemName: row.masterItemName, price: row.price, date: row.date });
+    byStore.set(store, entries);
+  }
+
+  const groups = Array.from(byStore, ([store, entries]) => ({
+    store,
+    entries: entries.sort((a, b) => b.date.localeCompare(a.date)),
+  })).sort((a, b) => a.store.localeCompare(b.store));
+
+  res.json({ query: item, groups });
+});
+
+// Distinct master item names, for the search box's datalist.
+pricesRouter.get("/item-names", async (_req, res) => {
+  const names = (await readMasterItems()).map((item) => item.name);
+  res.json({ names: Array.from(new Set(names)) });
 });

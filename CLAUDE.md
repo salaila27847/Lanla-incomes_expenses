@@ -16,7 +16,7 @@ Monorepo with three independently deployable services, no shared build tooling b
 
 **Data flow:** PWA → `/controller` (auth to Sheets via service account) → `/backend` for OCR/matching/QR → back to `/controller` → write result to Sheets → back to PWA. This replaces the Apps-Script-based controller in `SPEC.md`'s original diagram with a Node.js service; Google Sheets itself is still the database. See the "Implementation notes" at the top of `SPEC.md` for why.
 
-**Current state:** this is a scaffold. Every OCR/matching/QR/Sheets integration point returns `501 Not Implemented` with a `TODO` comment describing what needs to be wired up — no real API keys, models, or Sheets calls exist yet.
+**Current state:** `/backend`'s OCR (`app/routers/ocr.py`) and fuzzy matching (`app/routers/match.py`) are implemented for real — OCR via Typhoon OCR's OpenAI-compatible API, matching via `rapidfuzz`. OCR defaults to `OCR_MOCK_MODE=true` (returns a canned fixture from `app/fixtures/sample_receipt.py`) since no `TYPHOON_API_KEY` or real receipt photos exist yet; flip it off once you have a key. QR generation, the `/controller`'s Google Sheets read/write, and the full upload → OCR → match → review → Sheets-write pipeline are still `501 Not Implemented` stubs with `TODO` comments.
 
 ## Commands
 

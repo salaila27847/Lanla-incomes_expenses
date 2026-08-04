@@ -1,8 +1,9 @@
 import { randomUUID } from "crypto";
 import { google } from "googleapis";
+import { env, envFlag } from "../env";
 
-const SPREADSHEET_ID = (process.env.SHEETS_SPREADSHEET_ID ?? "").trim();
-const MOCK_MODE = (process.env.SHEETS_MOCK_MODE ?? "true").toLowerCase() === "true";
+const SPREADSHEET_ID = env("SHEETS_SPREADSHEET_ID");
+const MOCK_MODE = envFlag("SHEETS_MOCK_MODE", true);
 
 // Direct equivalent of what Apps Script's SpreadsheetApp gave for free:
 // a service account authenticated against the Sheets API. See SETUP.md

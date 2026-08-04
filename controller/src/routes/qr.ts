@@ -1,8 +1,9 @@
 import { Router } from "express";
+import { env } from "../env";
 
 export const qrRouter = Router();
 
-const PYTHON_BACKEND_URL = (process.env.PYTHON_BACKEND_URL ?? "http://localhost:8000").trim();
+const PYTHON_BACKEND_URL = env("PYTHON_BACKEND_URL", "http://localhost:8000");
 
 // Thin proxy: the PromptPay ID is a backend-only secret (SAVINGS_PROMPTPAY_ID),
 // so the PWA only ever sends an amount.

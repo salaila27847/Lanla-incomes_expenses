@@ -27,6 +27,21 @@ STRUCTURE_PROMPT_PREFIX = (
 )
 
 
+async def _log_available_models(http_client: httpx.AsyncClient, headers: dict) -> None:
+    """Dump the model IDs this key can actually reach.
+
+    Which models an account can see is the one thing that can't be checked
+    from the code or the docs -- it varies per key -- so a "Model not found"
+    otherwise costs a guess-and-redeploy cycle per candidate name.
+    """
+    try:
+        response = await http_client.get(f"{TYPHOON_BASE_URL}/models", headers=headers)
+        model_ids = [entry.get("id") for entry in response.json().get("data", [])]
+        print(f"[ocr] models available to this key: {model_ids}")
+    except Exception as exc:  # diagnostics must never mask the real failure
+        print(f"[ocr] could not list available models: {exc!r}")
+
+
 @router.post("/")
 async def scan_receipt(image: UploadFile = File(...)) -> dict:
     """Line-item OCR: split one long receipt image into per-line entries.
@@ -78,6 +93,7 @@ async def scan_receipt(image: UploadFile = File(...)) -> dict:
             # status code to the PWA, not this detail -- Vercel logs are the
             # only place the actual Typhoon error body is visible.
             print(f"[ocr] OCR call failed: {ocr_response.status_code} {ocr_response.text}")
+            await _log_available_models(http_client, auth_headers)
             raise HTTPException(
                 status_code=502,
                 detail=f"Typhoon OCR returned {ocr_response.status_code}: {ocr_response.text}",
@@ -111,6 +127,7 @@ async def scan_receipt(image: UploadFile = File(...)) -> dict:
                 f"[ocr] structuring call failed: {structure_response.status_code} "
                 f"{structure_response.text}"
             )
+            await _log_available_models(http_client, auth_headers)
             raise HTTPException(
                 status_code=502,
                 detail=f"Typhoon structuring call returned {structure_response.status_code}: "

@@ -134,7 +134,6 @@ export default function ReceiptReview() {
         ref={fileInputRef}
         type="file"
         accept="image/*"
-        capture="environment"
         className="hidden"
         onChange={handleFileSelected}
       />
@@ -144,7 +143,7 @@ export default function ReceiptReview() {
         disabled={status === "scanning" || status === "saving"}
         className="w-full rounded-lg border border-dashed border-slate-700 py-6 text-sm text-slate-400 disabled:opacity-50"
       >
-        {status === "scanning" ? "กำลังสแกน..." : "แตะเพื่อถ่ายรูปสลิป"}
+        {status === "scanning" ? "กำลังสแกน..." : "แตะเพื่อถ่าย/เลือกรูปสลิป"}
       </button>
 
       {status === "error" && errorMessage && (

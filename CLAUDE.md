@@ -16,12 +16,12 @@ Monorepo with three independently deployable services, no shared build tooling b
 
 **Data flow:** PWA → `/controller` (auth to Sheets via service account) → `/backend` for OCR/matching/QR → back to `/controller` → write result to Sheets → back to PWA. This replaces the Apps-Script-based controller in `SPEC.md`'s original diagram with a Node.js service; Google Sheets itself is still the database. See the "Implementation notes" at the top of `SPEC.md` for why.
 
-**Current state:** the full scan → review → save loop for feature #1 (Split-Bill OCR + Master Item Matching) works end-to-end:
+**Current state:** feature #1 (Split-Bill OCR + Master Item Matching) and feature #2 (Budget & Expense Management) work end-to-end:
 - `/backend`'s OCR (`app/routers/ocr.py`) and fuzzy matching (`app/routers/match.py`) are real — OCR via Typhoon OCR's OpenAI-compatible API, matching via `rapidfuzz`. OCR defaults to `OCR_MOCK_MODE=true` (returns a canned fixture from `app/fixtures/sample_receipt.py`) since no `TYPHOON_API_KEY` or real receipt photos exist yet.
-- `/controller`'s Sheets client (`src/sheets/client.ts`) and its `/receipt/scan` + `/receipt/confirm` routes are real. Defaults to `SHEETS_MOCK_MODE=true` (an in-memory list stands in for the `MasterItems`/`PriceHistory` sheet tabs) since no Google Sheet or service account exists yet — see `SETUP.md` for that one-time manual setup.
-- `/frontend`'s `ReceiptReview` page calls both endpoints for real: scan a receipt, review/re-categorize, name any unmatched item, save.
+- `/controller`'s Sheets client (`src/sheets/client.ts`) covers all three tabs (`MasterItems`, `PriceHistory`, `MustPay`); its `/receipt/scan`, `/receipt/confirm`, and `/budget` routes are real. Defaults to `SHEETS_MOCK_MODE=true` (in-memory lists stand in for the sheet tabs) since no Google Sheet or service account exists yet — see `SETUP.md` for that one-time manual setup.
+- `/frontend`'s `ReceiptReview` page scans, reviews/re-categorizes, names unmatched items, and saves. `Budget` shows today's spend against the 5,000/5,000 THB caps (computed from `PriceHistory`) and a must-pay checklist (add via a name+amount form with autocomplete over previously-used names, mark paid with a tap — manual, not tied to receipt scanning).
 
-Still stubbed: QR generation (`/backend/app/routers/qr.py`), and the `/controller` routes for `prices`, `budget`, and `qr` (price-history lookup, budget/must-pay, savings QR — features #2-4 in `SPEC.md`).
+Still stubbed: QR generation (`/backend/app/routers/qr.py`), and the `/controller` routes for `prices` and `qr` (price-history lookup, savings QR — features #3-4 in `SPEC.md`).
 
 ## Commands
 

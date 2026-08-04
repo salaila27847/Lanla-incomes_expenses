@@ -4,7 +4,7 @@ The `/controller` service needs a real Google Sheet and a service account to tal
 
 ## 1. Create the Google Sheet
 
-Create a new Google Sheet with two tabs, each with an exact header row in row 1:
+Create a new Google Sheet with three tabs, each with an exact header row in row 1:
 
 **Tab `MasterItems`**
 | Name | Category | CreatedAt |
@@ -14,7 +14,13 @@ Create a new Google Sheet with two tabs, each with an exact header row in row 1:
 | Date | Store | MasterItemName | Category | Price |
 |------|-------|-----------------|----------|-------|
 
-Leave both tabs otherwise empty — rows get appended by the app.
+**Tab `MustPay`**
+| ID | Name | Amount | Month | Status | PaidAt |
+|----|------|--------|-------|--------|--------|
+
+(`Month` is `YYYY-MM`; `Status` is `unpaid` or `paid`.)
+
+Leave all tabs otherwise empty — rows get appended by the app.
 
 Copy the spreadsheet ID out of its URL: `https://docs.google.com/spreadsheets/d/<SPREADSHEET_ID>/edit`.
 
@@ -39,4 +45,4 @@ SHEETS_SPREADSHEET_ID=<the ID from step 1>
 SHEETS_MOCK_MODE=false
 ```
 
-Restart the controller. `readMasterItems`/`appendMasterItem`/`appendPriceHistoryRow` (`controller/src/sheets/client.ts`) now hit the real Sheet instead of the in-memory mock.
+Restart the controller. All of `controller/src/sheets/client.ts` (master items, price history, must-pay) now hits the real Sheet instead of the in-memory mock.

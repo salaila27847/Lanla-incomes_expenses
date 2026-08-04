@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { google } from "googleapis";
 
 const SPREADSHEET_ID = process.env.SHEETS_SPREADSHEET_ID ?? "";
@@ -34,6 +35,16 @@ async function appendRow(range: string, values: unknown[]): Promise<void> {
   });
 }
 
+async function updateRange(range: string, values: unknown[]): Promise<void> {
+  const sheets = getSheetsClient();
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SPREADSHEET_ID,
+    range,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [values] },
+  });
+}
+
 export type ItemCategory = "food" | "goods";
 
 export interface MasterItem {
@@ -49,11 +60,23 @@ export interface PriceHistoryRow {
   price: number;
 }
 
-// SHEETS_MOCK_MODE stand-in for the MasterItems / PriceHistory tabs (see
-// SETUP.md) — lets the scan -> confirm loop run end-to-end before the
-// user has created a real Sheet + service account. Resets on restart.
+export type MustPayStatus = "unpaid" | "paid";
+
+export interface MustPayItem {
+  id: string;
+  name: string;
+  amount: number;
+  month: string; // YYYY-MM
+  status: MustPayStatus;
+  paidAt: string | null;
+}
+
+// SHEETS_MOCK_MODE stand-in for the MasterItems / PriceHistory / MustPay
+// tabs (see SETUP.md) — lets the app run end-to-end before the user has
+// created a real Sheet + service account. Resets on restart.
 const mockMasterItems: MasterItem[] = [];
 const mockPriceHistory: PriceHistoryRow[] = [];
+const mockMustPayItems: MustPayItem[] = [];
 
 export async function readMasterItems(): Promise<MasterItem[]> {
   if (MOCK_MODE) {
@@ -88,4 +111,77 @@ export async function appendPriceHistoryRow(row: PriceHistoryRow): Promise<void>
     row.category,
     row.price,
   ]);
+}
+
+export async function readPriceHistory(): Promise<PriceHistoryRow[]> {
+  if (MOCK_MODE) {
+    return mockPriceHistory;
+  }
+  const rows = await readRange("PriceHistory!A2:E");
+  return rows
+    .filter((row) => row[0])
+    .map((row) => ({
+      date: String(row[0]),
+      store: row[1] ? String(row[1]) : null,
+      masterItemName: String(row[2]),
+      category: row[3] === "goods" ? "goods" : "food",
+      price: Number(row[4]),
+    }));
+}
+
+export async function readMustPayItems(): Promise<MustPayItem[]> {
+  if (MOCK_MODE) {
+    return mockMustPayItems;
+  }
+  const rows = await readRange("MustPay!A2:F");
+  return rows
+    .filter((row) => row[0])
+    .map((row) => ({
+      id: String(row[0]),
+      name: String(row[1]),
+      amount: Number(row[2]),
+      month: String(row[3]),
+      status: row[4] === "paid" ? "paid" : "unpaid",
+      paidAt: row[5] ? String(row[5]) : null,
+    }));
+}
+
+export async function appendMustPayItem(input: {
+  name: string;
+  amount: number;
+  month: string;
+}): Promise<MustPayItem> {
+  const item: MustPayItem = {
+    id: randomUUID(),
+    name: input.name,
+    amount: input.amount,
+    month: input.month,
+    status: "unpaid",
+    paidAt: null,
+  };
+  if (MOCK_MODE) {
+    mockMustPayItems.push(item);
+    return item;
+  }
+  await appendRow("MustPay!A:F", [item.id, item.name, item.amount, item.month, item.status, ""]);
+  return item;
+}
+
+export async function updateMustPayStatus(id: string, status: MustPayStatus): Promise<void> {
+  const paidAt = status === "paid" ? new Date().toISOString() : null;
+
+  if (MOCK_MODE) {
+    const item = mockMustPayItems.find((mustPay) => mustPay.id === id);
+    if (item) {
+      item.status = status;
+      item.paidAt = paidAt;
+    }
+    return;
+  }
+
+  const ids = await readRange("MustPay!A2:A");
+  const rowIndex = ids.findIndex((row) => row[0] === id);
+  if (rowIndex === -1) return;
+  const rowNumber = rowIndex + 2; // header is row 1, data starts at row 2
+  await updateRange(`MustPay!E${rowNumber}:F${rowNumber}`, [status, paidAt ?? ""]);
 }

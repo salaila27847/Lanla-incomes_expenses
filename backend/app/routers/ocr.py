@@ -45,6 +45,13 @@ async def scan_receipt(image: UploadFile = File(...)) -> dict:
 
     from openai import OpenAI  # only needed on the real-API path
 
+    # Never log the key itself -- length + last 4 chars is enough to tell
+    # "wrong/stale key" apart from "wrong model" without leaking the secret.
+    print(
+        f"[ocr] base_url={TYPHOON_BASE_URL!r} model={TYPHOON_OCR_MODEL!r} "
+        f"key_len={len(TYPHOON_API_KEY)} key_suffix={TYPHOON_API_KEY[-4:]!r}"
+    )
+
     client = OpenAI(base_url=TYPHOON_BASE_URL, api_key=TYPHOON_API_KEY)
     encoded_image = base64.b64encode(image_bytes).decode("utf-8")
     content_type = image.content_type or "image/jpeg"

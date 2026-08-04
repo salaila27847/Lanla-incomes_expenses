@@ -74,6 +74,10 @@ async def scan_receipt(image: UploadFile = File(...)) -> dict:
             },
         )
         if ocr_response.status_code != 200:
+            # Printed (not just raised) because /controller only forwards our
+            # status code to the PWA, not this detail -- Vercel logs are the
+            # only place the actual Typhoon error body is visible.
+            print(f"[ocr] OCR call failed: {ocr_response.status_code} {ocr_response.text}")
             raise HTTPException(
                 status_code=502,
                 detail=f"Typhoon OCR returned {ocr_response.status_code}: {ocr_response.text}",
@@ -103,6 +107,10 @@ async def scan_receipt(image: UploadFile = File(...)) -> dict:
             },
         )
         if structure_response.status_code != 200:
+            print(
+                f"[ocr] structuring call failed: {structure_response.status_code} "
+                f"{structure_response.text}"
+            )
             raise HTTPException(
                 status_code=502,
                 detail=f"Typhoon structuring call returned {structure_response.status_code}: "

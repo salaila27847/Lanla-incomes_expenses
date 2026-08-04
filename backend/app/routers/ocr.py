@@ -34,12 +34,23 @@ async def _log_available_models(http_client: httpx.AsyncClient, headers: dict) -
     from the code or the docs -- it varies per key -- so a "Model not found"
     otherwise costs a guess-and-redeploy cycle per candidate name.
     """
+    response = None
     try:
         response = await http_client.get(f"{TYPHOON_BASE_URL}/models", headers=headers)
-        model_ids = [entry.get("id") for entry in response.json().get("data", [])]
-        print(f"[ocr] models available to this key: {model_ids}")
+        # Typhoon returns a bare list here, not OpenAI's {"data": [...]}
+        # envelope, and entries may be plain strings rather than objects.
+        payload = response.json()
+        entries = payload.get("data", []) if isinstance(payload, dict) else payload
+        model_ids = [e.get("id") if isinstance(e, dict) else e for e in entries]
+        if model_ids:
+            print(f"[ocr] models available to this key: {model_ids}")
+        else:
+            # Shape we didn't anticipate -- the raw body is more use than [].
+            print(f"[ocr] unrecognised /models shape, raw: {response.text[:1000]!r}")
     except Exception as exc:  # diagnostics must never mask the real failure
         print(f"[ocr] could not list available models: {exc!r}")
+        if response is not None:
+            print(f"[ocr] raw /models response: {response.text[:1000]!r}")
 
 
 @router.post("/")

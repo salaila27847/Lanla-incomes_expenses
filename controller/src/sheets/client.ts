@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { google } from "googleapis";
 
-const SPREADSHEET_ID = process.env.SHEETS_SPREADSHEET_ID ?? "";
+const SPREADSHEET_ID = (process.env.SHEETS_SPREADSHEET_ID ?? "").trim();
 const MOCK_MODE = (process.env.SHEETS_MOCK_MODE ?? "true").toLowerCase() === "true";
 
 // Direct equivalent of what Apps Script's SpreadsheetApp gave for free:

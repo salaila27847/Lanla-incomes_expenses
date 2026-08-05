@@ -57,6 +57,30 @@ async function updateRange(range: string, values: unknown[]): Promise<void> {
   });
 }
 
+// Row number of the first row whose first column equals `value`, for the
+// read-then-write updates below. Header is row 1, so data starts at row 2.
+async function findRowNumber(keyColumnRange: string, value: string): Promise<number | null> {
+  const rows = await readRange(keyColumnRange);
+  const index = rows.findIndex((row) => row[0] === value);
+  return index === -1 ? null : index + 2;
+}
+
+// Amounts can be typed straight into the Sheet by hand, and "1,200" is a
+// perfectly natural thing to type. Number() turns that into NaN, which
+// would then poison every total it feeds.
+function toNumber(value: unknown): number {
+  if (typeof value === "number") return value;
+  const parsed = Number(String(value ?? "").replace(/,/g, "").trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+// Distinguishes "the user left this blank" from "the user entered 0" —
+// a blank savings balance means unknown, not an empty account.
+function toOptionalNumber(value: unknown): number | null {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  return toNumber(value);
+}
+
 export type ItemCategory = "food" | "goods";
 
 export interface MasterItem {
@@ -78,17 +102,36 @@ export interface MustPayItem {
   id: string;
   name: string;
   amount: number;
-  month: string; // YYYY-MM
+  month: string; // a pay-cycle key (YYYY-MM), see src/cycles.ts
   status: MustPayStatus;
   paidAt: string | null;
 }
 
-// SHEETS_MOCK_MODE stand-in for the MasterItems / PriceHistory / MustPay
-// tabs (see SETUP.md) — lets the app run end-to-end before the user has
-// created a real Sheet + service account. Resets on restart.
+export interface CycleRow {
+  key: string; // YYYY-MM
+  payday: string | null; // YYYY-MM-DD
+  savingsBalance: number | null;
+}
+
+export interface IncomeEntry {
+  id: string;
+  date: string; // YYYY-MM-DD
+  source: string;
+  amount: number;
+}
+
+export type SettingsMap = Record<string, string>;
+
+// SHEETS_MOCK_MODE stand-in for the MasterItems / PriceHistory / MustPay /
+// Cycles / Income / Settings tabs (see SETUP.md) — lets the app run
+// end-to-end before the user has created a real Sheet + service account.
+// Resets on restart.
 const mockMasterItems: MasterItem[] = [];
 const mockPriceHistory: PriceHistoryRow[] = [];
 const mockMustPayItems: MustPayItem[] = [];
+const mockCycleRows: CycleRow[] = [];
+const mockIncome: IncomeEntry[] = [];
+const mockSettings: SettingsMap = {};
 
 export async function readMasterItems(): Promise<MasterItem[]> {
   if (MOCK_MODE) {
@@ -137,7 +180,7 @@ export async function readPriceHistory(): Promise<PriceHistoryRow[]> {
       store: row[1] ? String(row[1]) : null,
       masterItemName: String(row[2]),
       category: row[3] === "goods" ? "goods" : "food",
-      price: Number(row[4]),
+      price: toNumber(row[4]),
     }));
 }
 
@@ -151,7 +194,7 @@ export async function readMustPayItems(): Promise<MustPayItem[]> {
     .map((row) => ({
       id: String(row[0]),
       name: String(row[1]),
-      amount: Number(row[2]),
+      amount: toNumber(row[2]),
       month: String(row[3]),
       status: row[4] === "paid" ? "paid" : "unpaid",
       paidAt: row[5] ? String(row[5]) : null,
@@ -191,9 +234,134 @@ export async function updateMustPayStatus(id: string, status: MustPayStatus): Pr
     return;
   }
 
-  const ids = await readRange("MustPay!A2:A");
-  const rowIndex = ids.findIndex((row) => row[0] === id);
-  if (rowIndex === -1) return;
-  const rowNumber = rowIndex + 2; // header is row 1, data starts at row 2
+  const rowNumber = await findRowNumber("MustPay!A2:A", id);
+  if (rowNumber === null) return;
   await updateRange(`MustPay!E${rowNumber}:F${rowNumber}`, [status, paidAt ?? ""]);
+}
+
+// --- Cycles -----------------------------------------------------------
+// One row per pay cycle: the payday the user entered (they know the whole
+// year in advance) and the savings-account balance they read off their
+// bank at the end of it. Both are user-supplied — the payday because it
+// shifts with weekends and holidays, the balance because money sometimes
+// leaves the savings account directly and can't be derived from what the
+// app has recorded.
+
+export async function readCycleRows(): Promise<CycleRow[]> {
+  if (MOCK_MODE) {
+    return mockCycleRows;
+  }
+  const rows = await readRange("Cycles!A2:C");
+  return rows
+    .filter((row) => row[0])
+    .map((row) => ({
+      key: String(row[0]),
+      payday: row[1] ? String(row[1]) : null,
+      savingsBalance: toOptionalNumber(row[2]),
+    }));
+}
+
+/**
+ * Writes one cycle's row, creating it if the key is new. Fields left
+ * `undefined` keep whatever is already stored, so setting a payday doesn't
+ * wipe a savings balance entered earlier (and vice versa).
+ */
+export async function upsertCycleRow(update: {
+  key: string;
+  payday?: string | null;
+  savingsBalance?: number | null;
+}): Promise<CycleRow> {
+  const existing = (await readCycleRows()).find((row) => row.key === update.key);
+  const merged: CycleRow = {
+    key: update.key,
+    payday: update.payday === undefined ? (existing?.payday ?? null) : update.payday,
+    savingsBalance:
+      update.savingsBalance === undefined
+        ? (existing?.savingsBalance ?? null)
+        : update.savingsBalance,
+  };
+
+  if (MOCK_MODE) {
+    const index = mockCycleRows.findIndex((row) => row.key === update.key);
+    if (index === -1) mockCycleRows.push(merged);
+    else mockCycleRows[index] = merged;
+    return merged;
+  }
+
+  const values = [merged.key, merged.payday ?? "", merged.savingsBalance ?? ""];
+  const rowNumber = await findRowNumber("Cycles!A2:A", update.key);
+  if (rowNumber === null) await appendRow("Cycles!A:C", values);
+  else await updateRange(`Cycles!A${rowNumber}:C${rowNumber}`, values);
+  return merged;
+}
+
+// --- Income -----------------------------------------------------------
+
+export async function readIncome(): Promise<IncomeEntry[]> {
+  if (MOCK_MODE) {
+    return mockIncome;
+  }
+  const rows = await readRange("Income!A2:D");
+  return rows
+    .filter((row) => row[0])
+    .map((row) => ({
+      id: String(row[0]),
+      date: String(row[1]),
+      source: String(row[2]),
+      amount: toNumber(row[3]),
+    }));
+}
+
+export async function appendIncome(input: {
+  date: string;
+  source: string;
+  amount: number;
+}): Promise<IncomeEntry> {
+  const entry: IncomeEntry = { id: randomUUID(), ...input };
+  if (MOCK_MODE) {
+    mockIncome.push(entry);
+    return entry;
+  }
+  await appendRow("Income!A:D", [entry.id, entry.date, entry.source, entry.amount]);
+  return entry;
+}
+
+export async function deleteIncome(id: string): Promise<void> {
+  if (MOCK_MODE) {
+    const index = mockIncome.findIndex((entry) => entry.id === id);
+    if (index !== -1) mockIncome.splice(index, 1);
+    return;
+  }
+  // Blanking the row rather than removing it: deleting a row needs
+  // batchUpdate + the tab's numeric sheetId, a whole second API surface,
+  // and every read here already skips rows with no ID.
+  const rowNumber = await findRowNumber("Income!A2:A", id);
+  if (rowNumber === null) return;
+  await updateRange(`Income!A${rowNumber}:D${rowNumber}`, ["", "", "", ""]);
+}
+
+// --- Settings ---------------------------------------------------------
+// Key/value so a new setting needs no schema change — and so the user can
+// read and edit them in the Sheet directly.
+
+export async function readSettings(): Promise<SettingsMap> {
+  if (MOCK_MODE) {
+    return { ...mockSettings };
+  }
+  const rows = await readRange("Settings!A2:B");
+  return Object.fromEntries(
+    rows.filter((row) => row[0]).map((row) => [String(row[0]), String(row[1] ?? "")]),
+  );
+}
+
+export async function writeSettings(updates: SettingsMap): Promise<void> {
+  if (MOCK_MODE) {
+    Object.assign(mockSettings, updates);
+    return;
+  }
+  for (const [key, value] of Object.entries(updates)) {
+    const rowNumber = await findRowNumber("Settings!A2:A", key);
+    if (rowNumber === null) await appendRow("Settings!A:B", [key, value]);
+    else await updateRange(`Settings!A${rowNumber}:B${rowNumber}`, [key, value]);
+  }
 }

@@ -1,4 +1,6 @@
 import { Router } from "express";
+import { cycleContaining } from "../cycleService";
+import { loadSettings } from "../settings";
 import {
   appendMustPayItem,
   readMustPayItems,
@@ -8,28 +10,37 @@ import {
 
 export const budgetRouter = Router();
 
-// Matches SPEC.md's exact daily caps — not configurable yet.
-const DAILY_BUDGET_THB = { food: 5000, goods: 5000 };
-
-function todayAndMonth(): { today: string; month: string } {
-  const today = new Date().toISOString().slice(0, 10);
-  return { today, month: today.slice(0, 7) };
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
+// The caps are per pay cycle, not per day. An earlier version compared
+// today's spend alone against 5,000 — unreachable in a day at this budget,
+// so the page never said anything useful. The user's own spreadsheet reads
+// "เป้าหมาย 5,000/เดือน" against actuals of 4,000–6,000 a month.
 budgetRouter.get("/", async (_req, res) => {
-  const { today, month } = todayAndMonth();
+  const [cycle, settings, priceHistory, mustPayItems] = await Promise.all([
+    cycleContaining(today()),
+    loadSettings(),
+    readPriceHistory(),
+    readMustPayItems(),
+  ]);
 
-  const priceHistory = await readPriceHistory();
-  const spentToday = { food: 0, goods: 0 };
-  for (const row of priceHistory) {
-    if (row.date === today) {
-      spentToday[row.category] += row.price;
+  const spentThisCycle = { food: 0, goods: 0 };
+  if (cycle) {
+    for (const row of priceHistory) {
+      if (row.date >= cycle.payday && row.date <= cycle.end) {
+        spentThisCycle[row.category] += row.price;
+      }
     }
   }
 
-  const mustPay = (await readMustPayItems()).filter((item) => item.month === month);
-
-  res.json({ dailyBudget: DAILY_BUDGET_THB, spentToday, mustPay });
+  res.json({
+    cycle,
+    cycleBudget: { food: settings.cycleBudgetFood, goods: settings.cycleBudgetGoods },
+    spentThisCycle,
+    mustPay: mustPayItems.filter((item) => item.month === cycle?.key),
+  });
 });
 
 // Distinct historical must-pay names (most recent amount per name), so
@@ -52,9 +63,16 @@ budgetRouter.post("/must-pay", async (req, res) => {
     res.status(400).json({ error: "name and a positive amount are required" });
     return;
   }
-  const { month } = todayAndMonth();
-  const item = await appendMustPayItem({ name, amount, month });
-  res.status(201).json(item);
+
+  // Stamped with the cycle the bill falls in, not the calendar month, so a
+  // bill added just after payday lands in the cycle that will pay it.
+  const cycle = await cycleContaining(today());
+  if (!cycle) {
+    res.status(500).json({ error: "could not resolve the current pay cycle" });
+    return;
+  }
+
+  res.status(201).json(await appendMustPayItem({ name, amount, month: cycle.key }));
 });
 
 budgetRouter.post("/must-pay/:id/mark-paid", async (req, res) => {

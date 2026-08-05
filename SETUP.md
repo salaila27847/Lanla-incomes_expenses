@@ -4,7 +4,7 @@ The `/controller` service needs a real Google Sheet and a service account to tal
 
 ## 1. Create the Google Sheet
 
-Create a new Google Sheet with three tabs, each with an exact header row in row 1:
+Create a new Google Sheet with six tabs, each with an exact header row in row 1:
 
 **Tab `MasterItems`**
 | Name | Category | CreatedAt |
@@ -18,9 +18,36 @@ Create a new Google Sheet with three tabs, each with an exact header row in row 
 | ID | Name | Amount | Month | Status | PaidAt |
 |----|------|--------|-------|--------|--------|
 
-(`Month` is `YYYY-MM`; `Status` is `unpaid` or `paid`.)
+(`Month` is a pay-cycle key, `YYYY-MM`; `Status` is `unpaid` or `paid`.)
 
-Leave all tabs otherwise empty — rows get appended by the app.
+**Tab `Cycles`**
+| CycleKey | PaydayDate | SavingsBalance |
+|----------|------------|----------------|
+
+One row per pay cycle. `CycleKey` is `YYYY-MM`, `PaydayDate` is the day the
+salary actually landed (`YYYY-MM-DD`), `SavingsBalance` is that cycle's
+closing balance in the savings account — read off the bank, since money can
+leave that account without passing through the app. A cycle runs from its
+payday to the day before the next one, and is named for the month whose 15th
+falls inside it, so a payday on 26 Dec 2025 belongs to cycle `2026-01`. You
+can fill in the whole year at once from the app's แดชบอร์ด page; any month
+left blank is estimated from the nearest one you did enter.
+
+**Tab `Income`**
+| ID | Date | Source | Amount |
+|----|------|--------|--------|
+
+**Tab `Settings`**
+| Key | Value |
+|-----|-------|
+
+Three keys, all optional — the app falls back to the defaults in brackets if
+a row is missing or blank: `opening_balance` [0] is the spending account's
+starting balance, from which the dashboard runs its balance forward;
+`cycle_budget_food` [5000] and `cycle_budget_goods` [5000] are the caps
+**per pay cycle**, not per day.
+
+Leave the tabs otherwise empty — rows get appended by the app.
 
 Copy the spreadsheet ID out of its URL: `https://docs.google.com/spreadsheets/d/<SPREADSHEET_ID>/edit`.
 
@@ -45,4 +72,4 @@ SHEETS_SPREADSHEET_ID=<the ID from step 1>
 SHEETS_MOCK_MODE=false
 ```
 
-Restart the controller. All of `controller/src/sheets/client.ts` (master items, price history, must-pay) now hits the real Sheet instead of the in-memory mock.
+Restart the controller. All of `controller/src/sheets/client.ts` (master items, price history, must-pay, cycles, income, settings) now hits the real Sheet instead of the in-memory mock.

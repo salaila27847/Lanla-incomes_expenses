@@ -10,10 +10,37 @@ interface MustPayItem {
   paidAt: string | null;
 }
 
+interface Cycle {
+  key: string;
+  payday: string;
+  end: string;
+}
+
 interface BudgetResponse {
-  dailyBudget: { food: number; goods: number };
-  spentToday: { food: number; goods: number };
+  cycle: Cycle | null;
+  cycleBudget: { food: number; goods: number };
+  spentThisCycle: { food: number; goods: number };
   mustPay: MustPayItem[];
+}
+
+const THAI_MONTHS = [
+  "ม.ค.",
+  "ก.พ.",
+  "มี.ค.",
+  "เม.ย.",
+  "พ.ค.",
+  "มิ.ย.",
+  "ก.ค.",
+  "ส.ค.",
+  "ก.ย.",
+  "ต.ค.",
+  "พ.ย.",
+  "ธ.ค.",
+];
+
+function shortDate(iso: string): string {
+  const [, month, day] = iso.split("-").map(Number);
+  return `${day} ${THAI_MONTHS[month - 1]}`;
 }
 
 interface RecurringName {
@@ -109,20 +136,25 @@ export default function Budget() {
   return (
     <section className="space-y-6">
       <div>
-        <h2 className="text-base font-medium">งบประมาณรายวัน</h2>
+        <h2 className="text-base font-medium">งบประมาณรอบนี้</h2>
+        <p className="text-xs text-slate-500">
+          {budget?.cycle
+            ? `${shortDate(budget.cycle.payday)} – ${shortDate(budget.cycle.end)} (นับจากวันเงินเดือนเข้า)`
+            : "กำลังโหลด..."}
+        </p>
         <div className="mt-2 grid grid-cols-2 gap-3">
           <div className="rounded-lg border border-slate-800 p-3">
             <p className="text-xs text-slate-500">🍔 ค่ากิน</p>
             <p className="text-lg">
-              {(budget?.spentToday.food ?? 0).toLocaleString()} /{" "}
-              {(budget?.dailyBudget.food ?? 5000).toLocaleString()} บาท
+              {(budget?.spentThisCycle.food ?? 0).toLocaleString()} /{" "}
+              {(budget?.cycleBudget.food ?? 5000).toLocaleString()} บาท
             </p>
           </div>
           <div className="rounded-lg border border-slate-800 p-3">
             <p className="text-xs text-slate-500">🧴 ของใช้</p>
             <p className="text-lg">
-              {(budget?.spentToday.goods ?? 0).toLocaleString()} /{" "}
-              {(budget?.dailyBudget.goods ?? 5000).toLocaleString()} บาท
+              {(budget?.spentThisCycle.goods ?? 0).toLocaleString()} /{" "}
+              {(budget?.cycleBudget.goods ?? 5000).toLocaleString()} บาท
             </p>
           </div>
         </div>
@@ -133,7 +165,7 @@ export default function Budget() {
       <div>
         <h2 className="text-base font-medium">รายการที่ต้องจ่าย</h2>
         {!budget || budget.mustPay.length === 0 ? (
-          <p className="mt-2 text-sm text-slate-500">ไม่มีรายการค้างจ่ายเดือนนี้</p>
+          <p className="mt-2 text-sm text-slate-500">ไม่มีรายการค้างจ่ายรอบนี้</p>
         ) : (
           <ul className="mt-2 divide-y divide-slate-800">
             {budget.mustPay.map((item) => (

@@ -57,6 +57,30 @@ async function updateRange(range: string, values: unknown[]): Promise<void> {
   });
 }
 
+/**
+ * Reads a range from a tab that may not exist yet.
+ *
+ * Cycles, Income and Settings were added after the first Sheets went into
+ * use, and the API answers a missing tab with a 400 "Unable to parse range"
+ * rather than an empty result. Left unhandled that turns a Sheet created
+ * before those tabs existed into a 500 on the Budget page — one that works
+ * fine today. Treating it as "no rows" lets every page keep rendering on
+ * defaults until the tabs from SETUP.md are added.
+ *
+ * Writes deliberately still throw: a failed save must not look like it
+ * worked.
+ */
+async function readOptionalRange(range: string): Promise<unknown[][]> {
+  try {
+    return await readRange(range);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/unable to parse range/i.test(message)) throw error;
+    console.warn(`[sheets] no "${range.split("!")[0]}" tab yet — see SETUP.md. Using defaults.`);
+    return [];
+  }
+}
+
 // Row number of the first row whose first column equals `value`, for the
 // read-then-write updates below. Header is row 1, so data starts at row 2.
 async function findRowNumber(keyColumnRange: string, value: string): Promise<number | null> {
@@ -251,7 +275,7 @@ export async function readCycleRows(): Promise<CycleRow[]> {
   if (MOCK_MODE) {
     return mockCycleRows;
   }
-  const rows = await readRange("Cycles!A2:C");
+  const rows = await readOptionalRange("Cycles!A2:C");
   return rows
     .filter((row) => row[0])
     .map((row) => ({
@@ -301,7 +325,7 @@ export async function readIncome(): Promise<IncomeEntry[]> {
   if (MOCK_MODE) {
     return mockIncome;
   }
-  const rows = await readRange("Income!A2:D");
+  const rows = await readOptionalRange("Income!A2:D");
   return rows
     .filter((row) => row[0])
     .map((row) => ({
@@ -348,7 +372,7 @@ export async function readSettings(): Promise<SettingsMap> {
   if (MOCK_MODE) {
     return { ...mockSettings };
   }
-  const rows = await readRange("Settings!A2:B");
+  const rows = await readOptionalRange("Settings!A2:B");
   return Object.fromEntries(
     rows.filter((row) => row[0]).map((row) => [String(row[0]), String(row[1] ?? "")]),
   );

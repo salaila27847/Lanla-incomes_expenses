@@ -428,6 +428,50 @@ describe("cycles, income and settings", () => {
     expect(await client.readIncome()).toHaveLength(1);
   });
 
+  it("treats a tab that doesn't exist yet as empty", async () => {
+    // These three tabs came after the first Sheets went into use. The API
+    // answers a missing tab with a 400, so without this a Sheet created
+    // before them would 500 the Budget page — a page that works today.
+    const { google } = await import("googleapis");
+    vi.spyOn(google, "sheets").mockReturnValue({
+      spreadsheets: {
+        values: {
+          get: async ({ range }: { range: string }) => {
+            if (range.startsWith("Cycles")) throw new Error("Unable to parse range: Cycles!A2:C");
+            return { data: { values: [] } };
+          },
+        },
+      },
+    } as any);
+    const client = await loadClient({
+      SHEETS_MOCK_MODE: "false",
+      SHEETS_SPREADSHEET_ID: "sheet-123",
+    });
+
+    expect(await client.readCycleRows()).toEqual([]);
+  });
+
+  it("still surfaces a real Sheets failure", async () => {
+    // Only a missing tab is tolerable. Swallowing auth or quota errors
+    // would show the user an empty dashboard instead of a problem.
+    const { google } = await import("googleapis");
+    vi.spyOn(google, "sheets").mockReturnValue({
+      spreadsheets: {
+        values: {
+          get: async () => {
+            throw new Error("The caller does not have permission");
+          },
+        },
+      },
+    } as any);
+    const client = await loadClient({
+      SHEETS_MOCK_MODE: "false",
+      SHEETS_SPREADSHEET_ID: "sheet-123",
+    });
+
+    await expect(client.readCycleRows()).rejects.toThrow(/does not have permission/);
+  });
+
   it("reads settings as a key/value map", async () => {
     const { client } = await loadWithFakeSheets({
       "Settings!A2:B": [

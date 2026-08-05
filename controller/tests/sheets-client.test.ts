@@ -304,3 +304,202 @@ describe("environment handling", () => {
     expect(spy).toHaveBeenCalled();
   });
 });
+
+describe("cycles, income and settings", () => {
+  /** Like the helper above, but also records `update` calls — the new tabs
+   *  edit rows in place rather than only appending. */
+  async function loadWithFakeSheets(rowsByRange: Record<string, unknown[][]>) {
+    const calls: {
+      append: { range: string; values: unknown[] }[];
+      update: { range: string; values: unknown[] }[];
+    } = { append: [], update: [] };
+    const { google } = await import("googleapis");
+    vi.spyOn(google, "sheets").mockReturnValue({
+      spreadsheets: {
+        values: {
+          get: async ({ range }: { range: string }) => ({
+            data: { values: rowsByRange[range] ?? [] },
+          }),
+          append: async ({ range, requestBody }: any) => {
+            calls.append.push({ range, values: requestBody.values[0] });
+            return {};
+          },
+          update: async ({ range, requestBody }: any) => {
+            calls.update.push({ range, values: requestBody.values[0] });
+            return {};
+          },
+        },
+      },
+    } as any);
+
+    const client = await loadClient({
+      SHEETS_MOCK_MODE: "false",
+      SHEETS_SPREADSHEET_ID: "sheet-123",
+    });
+    return { client, calls };
+  }
+
+  it("reads a blank savings balance as null, not zero", async () => {
+    // Blank means "haven't checked the bank yet"; zero would claim the
+    // savings account is empty.
+    const { client } = await loadWithFakeSheets({
+      "Cycles!A2:C": [
+        ["2026-08", "2026-07-25", ""],
+        ["2026-09", "2026-08-27", "0"],
+      ],
+    });
+
+    const rows = await client.readCycleRows();
+
+    expect(rows[0].savingsBalance).toBeNull();
+    expect(rows[1].savingsBalance).toBe(0);
+  });
+
+  it("parses a hand-typed thousands separator", async () => {
+    // These tabs get edited directly in the Sheet, and "56,930.42" is the
+    // natural thing to type. Number() would make that NaN and poison every
+    // total it feeds.
+    const { client } = await loadWithFakeSheets({
+      "Cycles!A2:C": [["2026-08", "2026-07-25", "56,930.42"]],
+      "PriceHistory!A2:E": [["2026-08-04", "Lotus's", "ข้าวสาร", "food", "1,250.50"]],
+    });
+
+    expect((await client.readCycleRows())[0].savingsBalance).toBe(56930.42);
+    expect((await client.readPriceHistory())[0].price).toBe(1250.5);
+  });
+
+  it("appends a cycle row that doesn't exist yet", async () => {
+    const { client, calls } = await loadWithFakeSheets({ "Cycles!A2:A": [] });
+
+    await client.upsertCycleRow({ key: "2026-08", payday: "2026-07-25" });
+
+    expect(calls.append[0]).toEqual({
+      range: "Cycles!A:C",
+      values: ["2026-08", "2026-07-25", ""],
+    });
+    expect(calls.update).toEqual([]);
+  });
+
+  it("updates the matching row instead of appending a duplicate", async () => {
+    const { client, calls } = await loadWithFakeSheets({
+      "Cycles!A2:A": [["2026-07"], ["2026-08"]],
+      "Cycles!A2:C": [
+        ["2026-07", "2026-06-25", ""],
+        ["2026-08", "2026-07-25", ""],
+      ],
+    });
+
+    await client.upsertCycleRow({ key: "2026-08", savingsBalance: 500 });
+
+    // Second data row, and the header occupies row 1.
+    expect(calls.update[0].range).toBe("Cycles!A3:C3");
+    expect(calls.append).toEqual([]);
+  });
+
+  it("keeps the payday when only the savings balance changes", async () => {
+    const { client, calls } = await loadWithFakeSheets({
+      "Cycles!A2:A": [["2026-08"]],
+      "Cycles!A2:C": [["2026-08", "2026-07-25", ""]],
+    });
+
+    await client.upsertCycleRow({ key: "2026-08", savingsBalance: 500 });
+
+    expect(calls.update[0].values).toEqual(["2026-08", "2026-07-25", 500]);
+  });
+
+  it("blanks a deleted income row rather than leaving its data behind", async () => {
+    const { client, calls } = await loadWithFakeSheets({
+      "Income!A2:A": [["id-1"], ["id-2"]],
+    });
+
+    await client.deleteIncome("id-2");
+
+    expect(calls.update[0]).toEqual({ range: "Income!A3:D3", values: ["", "", "", ""] });
+  });
+
+  it("skips blanked income rows when reading", async () => {
+    const { client } = await loadWithFakeSheets({
+      "Income!A2:D": [
+        ["id-1", "2026-07-25", "เงินเดือน", "25000"],
+        ["", "", "", ""],
+      ],
+    });
+
+    expect(await client.readIncome()).toHaveLength(1);
+  });
+
+  it("treats a tab that doesn't exist yet as empty", async () => {
+    // These three tabs came after the first Sheets went into use. The API
+    // answers a missing tab with a 400, so without this a Sheet created
+    // before them would 500 the Budget page — a page that works today.
+    const { google } = await import("googleapis");
+    vi.spyOn(google, "sheets").mockReturnValue({
+      spreadsheets: {
+        values: {
+          get: async ({ range }: { range: string }) => {
+            if (range.startsWith("Cycles")) throw new Error("Unable to parse range: Cycles!A2:C");
+            return { data: { values: [] } };
+          },
+        },
+      },
+    } as any);
+    const client = await loadClient({
+      SHEETS_MOCK_MODE: "false",
+      SHEETS_SPREADSHEET_ID: "sheet-123",
+    });
+
+    expect(await client.readCycleRows()).toEqual([]);
+  });
+
+  it("still surfaces a real Sheets failure", async () => {
+    // Only a missing tab is tolerable. Swallowing auth or quota errors
+    // would show the user an empty dashboard instead of a problem.
+    const { google } = await import("googleapis");
+    vi.spyOn(google, "sheets").mockReturnValue({
+      spreadsheets: {
+        values: {
+          get: async () => {
+            throw new Error("The caller does not have permission");
+          },
+        },
+      },
+    } as any);
+    const client = await loadClient({
+      SHEETS_MOCK_MODE: "false",
+      SHEETS_SPREADSHEET_ID: "sheet-123",
+    });
+
+    await expect(client.readCycleRows()).rejects.toThrow(/does not have permission/);
+  });
+
+  it("reads settings as a key/value map", async () => {
+    const { client } = await loadWithFakeSheets({
+      "Settings!A2:B": [
+        ["opening_balance", "39643.61"],
+        ["cycle_budget_food", "5000"],
+      ],
+    });
+
+    expect(await client.readSettings()).toEqual({
+      opening_balance: "39643.61",
+      cycle_budget_food: "5000",
+    });
+  });
+
+  it("overwrites an existing setting rather than adding a second row", async () => {
+    const { client, calls } = await loadWithFakeSheets({
+      "Settings!A2:A": [["opening_balance"]],
+    });
+
+    await client.writeSettings({ opening_balance: "1000", cycle_budget_food: "6000" });
+
+    expect(calls.update[0]).toEqual({
+      range: "Settings!A2:B2",
+      values: ["opening_balance", "1000"],
+    });
+    expect(calls.append[0]).toEqual({
+      range: "Settings!A:B",
+      values: ["cycle_budget_food", "6000"],
+    });
+  });
+});

@@ -2,6 +2,8 @@ import "dotenv/config";
 import cors from "cors";
 import express from "express";
 import { budgetRouter } from "./routes/budget";
+import { dashboardRouter } from "./routes/dashboard";
+import { incomeRouter } from "./routes/income";
 import { pricesRouter } from "./routes/prices";
 import { qrRouter } from "./routes/qr";
 import { receiptRouter } from "./routes/receipt";
@@ -16,6 +18,8 @@ app.get("/health", (_req, res) => res.json({ status: "ok" }));
 app.use("/receipt", receiptRouter);
 app.use("/prices", pricesRouter);
 app.use("/budget", budgetRouter);
+app.use("/dashboard", dashboardRouter);
+app.use("/income", incomeRouter);
 app.use("/qr", qrRouter);
 
 const port = process.env.PORT ?? 3001;

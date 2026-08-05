@@ -4,6 +4,12 @@ The `/controller` service needs a real Google Sheet and a service account to tal
 
 ## 1. Create the Google Sheet
 
+**Shortcut:** `scripts/setup-sheet.gs` builds every tab below for you. Open the Sheet → **Extensions → Apps Script**, paste that file in, save, and run `setUpTrackerSheet`. It creates only the tabs that are missing and leaves existing ones completely untouched, so it's safe on a Sheet already in use — and it sets the column formats that keep `2026-01` from turning into a date. It also seeds the `Cycles` tab with a row per month of the current year, ready for your paydays.
+
+The same file has a `checkTrackerSheet` you can run afterwards: it reads nothing but reports, and tells you if any dated column comes back in a format the controller will reject. Worth running on a Sheet that predates these tabs, since `setUpTrackerSheet` deliberately won't reformat one that already exists.
+
+The rest of this section is the reference for what the script builds (or for doing it by hand).
+
 Create a new Google Sheet with six tabs, each with an exact header row in row 1:
 
 **Tab `MasterItems`**

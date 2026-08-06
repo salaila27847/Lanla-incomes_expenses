@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { amountOr0, formatMoney, parseAmount } from "../money";
 import MasterItemPicker, {
   type MasterItem,
   type MatchCandidate,
@@ -9,8 +10,10 @@ type ReceiptCategory = "food" | "goods";
 interface ReceiptLineItem {
   id: string;
   rawText: string;
-  /** Per unit. What the line cost is price × quantity. */
-  price: number;
+  /** The raw text in the price box, per unit — a controlled numeric input
+   *  has to hold what was typed, or "12." loses its decimal point the
+   *  moment it's pressed. Parse it with parseAmount, never Number(). */
+  price: string;
   quantity: number;
   category: ReceiptCategory;
   masterItemName: string;
@@ -90,7 +93,7 @@ export default function ReceiptReview() {
         result.items.map((item) => ({
           id: item.id,
           rawText: item.raw_text,
-          price: item.price,
+          price: String(item.price),
           quantity: item.quantity ?? 1,
           category: item.category ?? "food",
           masterItemName: item.master_item_name ?? "",
@@ -115,7 +118,7 @@ export default function ReceiptReview() {
       {
         id: `manual-${Date.now()}-${prev.length}`,
         rawText: "",
-        price: 0,
+        price: "",
         quantity: 1,
         category: "food",
         masterItemName: "",
@@ -129,8 +132,10 @@ export default function ReceiptReview() {
 
   const canSave =
     items.length > 0 &&
-    items.every((item) => item.masterItemName.trim().length > 0 && item.price >= 0);
-  const total = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    items.every(
+      (item) => item.masterItemName.trim().length > 0 && parseAmount(item.price) !== null,
+    );
+  const total = items.reduce((sum, item) => sum + amountOr0(item.price) * item.quantity, 0);
 
   async function handleSave() {
     setStatus("saving");
@@ -144,7 +149,7 @@ export default function ReceiptReview() {
           purchased_at: purchasedAt ?? today(),
           items: items.map((item) => ({
             raw_text: item.rawText || item.masterItemName,
-            price: item.price,
+            price: amountOr0(item.price),
             quantity: item.quantity,
             master_item_name: item.masterItemName.trim(),
             category: item.category,
@@ -317,9 +322,7 @@ export default function ReceiptReview() {
 
                   <input
                     value={item.price}
-                    onChange={(event) =>
-                      patchItem(item.id, { price: Number(event.target.value) || 0 })
-                    }
+                    onChange={(event) => patchItem(item.id, { price: event.target.value })}
                     inputMode="decimal"
                     aria-label="ราคาต่อชิ้น"
                     className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-right text-sm"
@@ -327,9 +330,13 @@ export default function ReceiptReview() {
                 </div>
 
                 <p className="text-right text-xs text-slate-500">
-                  {item.quantity > 1
-                    ? `${item.quantity} × ${item.price.toFixed(2)} = ${(item.price * item.quantity).toFixed(2)} บาท`
-                    : `${item.price.toFixed(2)} บาท`}
+                  {parseAmount(item.price) === null
+                    ? "ใส่ราคา"
+                    : item.quantity > 1
+                      ? `${item.quantity} × ${formatMoney(amountOr0(item.price))} = ${formatMoney(
+                          amountOr0(item.price) * item.quantity,
+                        )} บาท`
+                      : `${formatMoney(amountOr0(item.price))} บาท`}
                 </p>
               </li>
             ))}
@@ -337,7 +344,7 @@ export default function ReceiptReview() {
 
           <div className="flex items-center justify-between text-sm">
             <span className="text-slate-400">รวม</span>
-            <span className="tabular-nums">{total.toFixed(2)} บาท</span>
+            <span className="tabular-nums">{formatMoney(total)} บาท</span>
           </div>
 
           <button
@@ -358,7 +365,7 @@ export default function ReceiptReview() {
           </button>
           {!canSave && (
             <p className="text-center text-xs text-amber-400">
-              เลือกสินค้าให้ครบทุกรายการก่อนบันทึก
+              ใส่ชื่อสินค้าและราคาให้ครบทุกรายการก่อนบันทึก
             </p>
           )}
         </>

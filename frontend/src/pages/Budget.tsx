@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { parseAmount } from "../money";
 
 type MustPayStatus = "unpaid" | "paid";
 
@@ -137,8 +138,8 @@ export default function Budget() {
 
   async function handleAddMustPay(event: React.FormEvent) {
     event.preventDefault();
-    const amount = Number(newAmount);
-    if (!newName.trim() || !amount || amount <= 0) return;
+    const amount = parseAmount(newAmount);
+    if (!newName.trim() || amount === null || amount <= 0) return;
 
     setSubmitting(true);
     setErrorMessage(null);
@@ -430,8 +431,9 @@ function ExpenseEditor({
         </button>
         <button
           type="button"
-          onClick={() => onSave({ price: Number(price) || 0, quantity, category })}
-          className="flex-1 rounded-lg bg-sky-600 py-2 text-sm"
+          disabled={parseAmount(price) === null}
+          onClick={() => onSave({ price: parseAmount(price) ?? 0, quantity, category })}
+          className="flex-1 rounded-lg bg-sky-600 py-2 text-sm disabled:opacity-50"
         >
           บันทึก
         </button>

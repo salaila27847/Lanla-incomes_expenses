@@ -40,6 +40,14 @@ The gap exists because receipts frequently don't print the brand. Measured `fuzz
 
 Every line gets a picker, including auto-matched ones. An earlier version printed a confident match as unchangeable text, which is how two brands quietly shared one price history.
 
+## Amount inputs
+
+A controlled numeric input holds the **raw string**, never a number. Coercing on every keystroke makes half-typed values unrepresentable: `Number("12.")` is `12`, so pressing the decimal point erases it and no price with satang can be entered at all — which is exactly what happened to the price box on `ReceiptReview`. Clearing the box has the same shape: `Number("")` is `0`, so the field springs back to "0".
+
+Parse with `parseAmount` from `frontend/src/money.ts`, never `Number(x) || 0`. The `|| 0` is the other half of the bug: it turns a typo into a silent zero, and lets `-5` and `1e3` through into a total.
+
+`parseAmount` returns `null` for an empty box and `0` for a genuine zero — collapsing those is how an empty field would save as a free item.
+
 ## Pay cycles
 
 The user's month starts when their salary lands, not on the 1st. `controller/src/cycles.ts` holds the whole model as pure functions; `controller/src/cycleService.ts` is the only thing that pairs it with the `Cycles` tab, so `cycles.ts` stays I/O-free and unit-testable.
@@ -65,6 +73,7 @@ Frontend (`/frontend`):
 npm install
 npm run dev      # Vite dev server on :5173
 npm run build    # tsc -b && vite build
+npm test         # vitest run
 ```
 
 Controller (`/controller`):
@@ -88,7 +97,7 @@ Each service has its own `.env.example` — copy to `.env` and fill in before ru
 
 ## Tests
 
-`/backend` (pytest) and `/controller` (vitest + supertest) have suites; `/frontend` does not yet, and there is no linter or CI in any of the three.
+`/backend` (pytest), `/controller` (vitest + supertest) and `/frontend` (vitest) have suites; there is no linter or CI in any of the three. The frontend's covers pure helpers only — there is no DOM or component testing set up.
 
 Both suites run fully offline — the backend fakes Typhoon with `httpx.MockTransport` (see the `typhoon` fixture in `backend/tests/conftest.py`), and the controller runs the Sheets client in `SHEETS_MOCK_MODE` and stubs `fetch` for backend calls. No API keys or network access needed.
 

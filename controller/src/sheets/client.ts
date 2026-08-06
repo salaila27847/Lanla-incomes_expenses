@@ -331,21 +331,43 @@ export async function appendMustPayItem(input: {
   return item;
 }
 
-export async function updateMustPayStatus(id: string, status: MustPayStatus): Promise<void> {
+export async function updateMustPayStatus(
+  id: string,
+  status: MustPayStatus,
+): Promise<boolean> {
+  // Going back to unpaid clears the timestamp: a paidAt left behind on an
+  // unpaid row is a contradiction the sheet would carry indefinitely.
   const paidAt = status === "paid" ? new Date().toISOString() : null;
 
   if (MOCK_MODE) {
     const item = mockMustPayItems.find((mustPay) => mustPay.id === id);
-    if (item) {
-      item.status = status;
-      item.paidAt = paidAt;
-    }
-    return;
+    if (!item) return false;
+    item.status = status;
+    item.paidAt = paidAt;
+    return true;
   }
 
   const rowNumber = await findRowNumber("MustPay!A2:A", id);
-  if (rowNumber === null) return;
+  if (rowNumber === null) return false;
   await updateRange(`MustPay!E${rowNumber}:F${rowNumber}`, [status, paidAt ?? ""]);
+  return true;
+}
+
+export async function deleteMustPayItem(id: string): Promise<boolean> {
+  if (MOCK_MODE) {
+    const index = mockMustPayItems.findIndex((item) => item.id === id);
+    if (index === -1) return false;
+    mockMustPayItems.splice(index, 1);
+    return true;
+  }
+
+  const rowNumber = await findRowNumber("MustPay!A2:A", id);
+  if (rowNumber === null) return false;
+  // Blanked, not removed, like every other delete here — readMustPayItems
+  // skips rows with no ID, and leaving row numbers stable keeps concurrent
+  // reads from landing on the wrong row.
+  await updateRange(`MustPay!A${rowNumber}:F${rowNumber}`, ["", "", "", "", "", ""]);
+  return true;
 }
 
 // --- Cycles -----------------------------------------------------------

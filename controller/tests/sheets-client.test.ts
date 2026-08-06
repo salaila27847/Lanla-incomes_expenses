@@ -627,3 +627,49 @@ describe("cycles, income and settings", () => {
     });
   });
 });
+
+describe("deleting a must-pay item", () => {
+  async function loadWithFakeSheets(rowsByRange: Record<string, unknown[][]>) {
+    const calls: { update: { range: string; values: unknown[] }[] } = { update: [] };
+    const { google } = await import("googleapis");
+    vi.spyOn(google, "sheets").mockReturnValue({
+      spreadsheets: {
+        values: {
+          get: async ({ range }: { range: string }) => ({
+            data: { values: rowsByRange[range] ?? [] },
+          }),
+          append: async () => ({}),
+          update: async ({ range, requestBody }: any) => {
+            calls.update.push({ range, values: requestBody.values[0] });
+            return {};
+          },
+        },
+      },
+    } as any);
+
+    const client = await loadClient({
+      SHEETS_MOCK_MODE: "false",
+      SHEETS_SPREADSHEET_ID: "sheet-123",
+    });
+    return { client, calls };
+  }
+
+  it("blanks the whole row so the read filter skips it", async () => {
+    const { client, calls } = await loadWithFakeSheets({
+      "MustPay!A2:A": [["id-1"], ["id-2"]],
+    });
+
+    expect(await client.deleteMustPayItem("id-2")).toBe(true);
+    expect(calls.update[0]).toEqual({
+      range: "MustPay!A3:F3",
+      values: ["", "", "", "", "", ""],
+    });
+  });
+
+  it("reports an unknown id rather than writing somewhere", async () => {
+    const { client, calls } = await loadWithFakeSheets({ "MustPay!A2:A": [["id-1"]] });
+
+    expect(await client.deleteMustPayItem("id-nope")).toBe(false);
+    expect(calls.update).toEqual([]);
+  });
+});

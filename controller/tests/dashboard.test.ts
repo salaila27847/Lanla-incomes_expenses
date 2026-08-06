@@ -353,3 +353,23 @@ describe("/dashboard/cycles", () => {
     expect(response.status).toBe(400);
   });
 });
+
+describe("quantity", () => {
+  it("puts the line total in the column, not the unit price", async () => {
+    const { app, sheets } = await buildApp();
+    await sheets.upsertCycleRow(AUGUST);
+    await sheets.appendPriceHistoryRow({
+      date: "2026-08-01",
+      store: "Lotus's",
+      masterItemName: "นมสด",
+      category: "food",
+      price: 15,
+      quantity: 3,
+    });
+
+    const { body } = await request(app).get("/dashboard?year=2026");
+
+    expect(amountsOf(body, "variable", "🍔 ค่ากิน")["2026-08"]).toBe(45);
+    expect(body.totals.expense["2026-08"]).toBe(45);
+  });
+});

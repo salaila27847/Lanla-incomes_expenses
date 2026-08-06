@@ -3,6 +3,7 @@ import cors from "cors";
 import express from "express";
 import { budgetRouter } from "./routes/budget";
 import { dashboardRouter } from "./routes/dashboard";
+import { expensesRouter } from "./routes/expenses";
 import { incomeRouter } from "./routes/income";
 import { pricesRouter } from "./routes/prices";
 import { qrRouter } from "./routes/qr";
@@ -20,6 +21,7 @@ app.use("/prices", pricesRouter);
 app.use("/budget", budgetRouter);
 app.use("/dashboard", dashboardRouter);
 app.use("/income", incomeRouter);
+app.use("/expenses", expensesRouter);
 app.use("/qr", qrRouter);
 
 const port = process.env.PORT ?? 3001;

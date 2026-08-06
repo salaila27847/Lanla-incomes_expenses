@@ -264,3 +264,39 @@ describe("GET /budget/must-pay/recurring-names", () => {
     ]);
   });
 });
+
+describe("quantity", () => {
+  it("counts what the line cost, not the unit price", async () => {
+    // Three cartons at 15. Summing price alone reports 15 and the cap
+    // never notices two thirds of the grocery bill.
+    const { app, sheets } = await buildApp();
+    await sheets.appendPriceHistoryRow({
+      date: TODAY,
+      store: "Lotus's",
+      masterItemName: "นมสด",
+      category: "food",
+      price: 15,
+      quantity: 3,
+    });
+
+    const { body } = await request(app).get("/budget");
+
+    expect(body.spentThisCycle.food).toBe(45);
+  });
+
+  it("treats a row with no quantity as one", async () => {
+    // Every row written before the column existed looks like this.
+    const { app, sheets } = await buildApp();
+    await sheets.appendPriceHistoryRow({
+      date: TODAY,
+      store: null,
+      masterItemName: "ขนมปัง",
+      category: "food",
+      price: 29,
+    });
+
+    const { body } = await request(app).get("/budget");
+
+    expect(body.spentThisCycle.food).toBe(29);
+  });
+});

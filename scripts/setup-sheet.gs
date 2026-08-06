@@ -34,9 +34,12 @@ var TABS = [
     textColumns: [],
   },
   {
+    // Price is per unit and Quantity multiplies it, so a 3-pack records
+    // the unit price rather than making the product look 3x pricier.
+    // ID is what lets a row be edited or deleted later.
     name: 'PriceHistory',
-    headers: ['Date', 'Store', 'MasterItemName', 'Category', 'Price'],
-    textColumns: [1], // Date
+    headers: ['Date', 'Store', 'MasterItemName', 'Category', 'Price', 'Quantity', 'ID'],
+    textColumns: [1, 7], // Date, ID
   },
   {
     name: 'MustPay',
@@ -143,7 +146,24 @@ function checkTrackerSheet() {
   var problems = [];
 
   TABS.forEach(function (tab) {
-    if (!spreadsheet.getSheetByName(tab.name)) problems.push('Missing tab: ' + tab.name);
+    var sheet = spreadsheet.getSheetByName(tab.name);
+    if (!sheet) {
+      problems.push('Missing tab: ' + tab.name);
+      return;
+    }
+
+    // Columns added to a tab that already existed are the blind spot:
+    // setUpTrackerSheet skipped the tab entirely, so nothing added them.
+    var headers = sheet.getRange(1, 1, 1, tab.headers.length).getDisplayValues()[0];
+    var missing = tab.headers.filter(function (header, index) {
+      return String(headers[index]).trim() !== header;
+    });
+    if (missing.length) {
+      problems.push(
+        tab.name + ' is missing or mislabelled column(s): ' + missing.join(', ') +
+        '. Expected the header row to read: ' + tab.headers.join(' | '),
+      );
+    }
   });
 
   PATTERNS.forEach(function (check) {

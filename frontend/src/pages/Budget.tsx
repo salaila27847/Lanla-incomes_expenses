@@ -48,11 +48,23 @@ interface RecurringName {
   amount: number;
 }
 
+interface Expense {
+  id: string;
+  date: string;
+  store: string | null;
+  masterItemName: string;
+  category: "food" | "goods";
+  price: number;
+  quantity: number;
+}
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3001";
 
 export default function Budget() {
   const [budget, setBudget] = useState<BudgetResponse | null>(null);
   const [recurringNames, setRecurringNames] = useState<RecurringName[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [newName, setNewName] = useState("");
@@ -66,14 +78,49 @@ export default function Budget() {
         fetch(`${API_BASE_URL}/budget/must-pay/recurring-names`),
       ]);
       if (!budgetRes.ok) throw new Error(`โหลดงบประมาณไม่สำเร็จ (${budgetRes.status})`);
-      setBudget(await budgetRes.json());
+      const loaded: BudgetResponse = await budgetRes.json();
+      setBudget(loaded);
       if (namesRes.ok) {
         const { names } = await namesRes.json();
         setRecurringNames(names);
       }
+      if (loaded.cycle) await loadExpenses(loaded.cycle.key);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ");
     }
+  }
+
+  async function loadExpenses(cycleKey: string) {
+    const response = await fetch(`${API_BASE_URL}/expenses?cycle=${cycleKey}`);
+    if (response.ok) setExpenses((await response.json()).expenses);
+  }
+
+  async function saveExpense(id: string, patch: Partial<Expense>) {
+    setErrorMessage(null);
+    const response = await fetch(`${API_BASE_URL}/expenses/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      setErrorMessage(body.error ?? `แก้ไขไม่สำเร็จ (${response.status})`);
+      return;
+    }
+    setEditingId(null);
+    await loadBudget();
+  }
+
+  async function deleteExpense(id: string) {
+    setErrorMessage(null);
+    const response = await fetch(`${API_BASE_URL}/expenses/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      setErrorMessage(`ลบไม่สำเร็จ (${response.status})`);
+      return;
+    }
+    await loadBudget();
   }
 
   useEffect(() => {
@@ -217,6 +264,125 @@ export default function Budget() {
           </button>
         </form>
       </div>
+
+      <div>
+        <h2 className="text-base font-medium">รายการซื้อของรอบนี้</h2>
+        <p className="text-xs text-slate-500">
+          แตะที่รายการเพื่อแก้ไข — สลิปที่สแกนมาผิดแก้ตรงนี้ได้เลย
+        </p>
+        {expenses.length === 0 ? (
+          <p className="mt-2 text-sm text-slate-500">ยังไม่มีรายการในรอบนี้</p>
+        ) : (
+          <ul className="mt-2 divide-y divide-slate-800">
+            {expenses.map((expense) =>
+              editingId === expense.id ? (
+                <ExpenseEditor
+                  key={expense.id}
+                  expense={expense}
+                  onCancel={() => setEditingId(null)}
+                  onSave={(patch) => saveExpense(expense.id, patch)}
+                  onDelete={() => deleteExpense(expense.id)}
+                />
+              ) : (
+                <li key={expense.id}>
+                  <button
+                    type="button"
+                    onClick={() => setEditingId(expense.id)}
+                    className="flex w-full items-center justify-between gap-2 py-2 text-left text-sm"
+                  >
+                    <span className="min-w-0 flex-1 truncate">
+                      {expense.category === "food" ? "🍔" : "🧴"} {expense.masterItemName}
+                      {expense.quantity > 1 && (
+                        <span className="text-slate-500"> ×{expense.quantity}</span>
+                      )}
+                    </span>
+                    <span className="shrink-0 tabular-nums">
+                      {(expense.price * expense.quantity).toLocaleString()} บาท
+                    </span>
+                  </button>
+                </li>
+              ),
+            )}
+          </ul>
+        )}
+      </div>
     </section>
+  );
+}
+
+/** Inline editor for one already-saved expense row. */
+function ExpenseEditor({
+  expense,
+  onSave,
+  onCancel,
+  onDelete,
+}: {
+  expense: Expense;
+  onSave: (patch: Partial<Expense>) => void;
+  onCancel: () => void;
+  onDelete: () => void;
+}) {
+  const [price, setPrice] = useState(String(expense.price));
+  const [quantity, setQuantity] = useState(expense.quantity);
+  const [category, setCategory] = useState(expense.category);
+
+  return (
+    <li className="space-y-2 py-3">
+      <p className="text-sm">{expense.masterItemName}</p>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setCategory(category === "food" ? "goods" : "food")}
+          className="shrink-0 rounded-full bg-slate-800 px-3 py-2 text-sm"
+        >
+          {category === "food" ? "🍔 กิน" : "🧴 ใช้"}
+        </button>
+        <div className="flex shrink-0 items-center rounded-full bg-slate-800">
+          <button
+            type="button"
+            onClick={() => setQuantity(Math.max(1, quantity - 1))}
+            className="px-3 py-2 text-sm"
+            aria-label="ลดจำนวน"
+          >
+            −
+          </button>
+          <span className="min-w-6 text-center text-sm tabular-nums">{quantity}</span>
+          <button
+            type="button"
+            onClick={() => setQuantity(quantity + 1)}
+            className="px-3 py-2 text-sm"
+            aria-label="เพิ่มจำนวน"
+          >
+            ＋
+          </button>
+        </div>
+        <input
+          value={price}
+          onChange={(event) => setPrice(event.target.value)}
+          inputMode="decimal"
+          aria-label="ราคาต่อชิ้น"
+          className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-right text-sm"
+        />
+      </div>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={onDelete}
+          className="rounded-lg border border-red-900 px-3 py-2 text-sm text-red-400"
+        >
+          ลบ
+        </button>
+        <button type="button" onClick={onCancel} className="flex-1 rounded-lg bg-slate-800 py-2 text-sm">
+          ยกเลิก
+        </button>
+        <button
+          type="button"
+          onClick={() => onSave({ price: Number(price) || 0, quantity, category })}
+          className="flex-1 rounded-lg bg-sky-600 py-2 text-sm"
+        >
+          บันทึก
+        </button>
+      </div>
+    </li>
   );
 }

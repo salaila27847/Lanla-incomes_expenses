@@ -156,3 +156,23 @@ describe("GET /prices/item-names", () => {
     expect(body.names).toEqual(["นมสด UHT 250ml", "สบู่เหลว"]);
   });
 });
+
+describe("unit price vs line total", () => {
+  it("compares the unit price, not what the line cost", async () => {
+    // The whole point of a price history: a 3-pack's total is not
+    // comparable to a single unit bought somewhere else.
+    const { app, sheets } = await buildApp();
+    await sheets.appendPriceHistoryRow({
+      date: "2026-08-04",
+      store: "Lotus's",
+      masterItemName: "นมสด UHT 250ml",
+      category: "food",
+      price: 15,
+      quantity: 3,
+    });
+
+    const { body } = await request(app).get("/prices?item=นมสด");
+
+    expect(body.groups[0].entries[0]).toMatchObject({ price: 15, quantity: 3 });
+  });
+});

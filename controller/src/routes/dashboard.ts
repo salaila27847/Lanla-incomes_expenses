@@ -114,7 +114,8 @@ dashboardRouter.get("/", async (req, res) => {
   for (const row of priceHistory) {
     const cycle = cycleForDate(row.date, cycles);
     if (!cycle) continue;
-    add(row.category === "food" ? foodAmounts : goodsAmounts, cycle.key, row.price);
+    // Line total, not unit price — see the same note in budget.ts.
+    add(row.category === "food" ? foodAmounts : goodsAmounts, cycle.key, row.price * row.quantity);
   }
 
   const expenseTotals: AmountsByCycle = {};

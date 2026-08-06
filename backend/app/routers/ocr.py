@@ -20,11 +20,61 @@ STRUCTURE_PROMPT_PREFIX = (
     "no commentary) in this exact shape:\n"
     '{"store": "<store name or null>", "purchased_at": "<YYYY-MM-DD or null>", '
     '"items": [{"id": "<1-based index as string>", "raw_text": "<item name '
-    'exactly as printed>", "price": <number>}]}\n'
+    'exactly as printed>", "quantity": <number>, "line_total": <number>}]}\n'
+    "quantity is how many units of that item were bought (1 if the receipt "
+    "doesn't say). line_total is the amount charged for the whole line, "
+    "exactly as printed -- copy the number, do not compute a per-unit price "
+    "or add lines together.\n"
     "Include every line that has a price, even if the item name is unclear "
     "or abbreviated. Do not invent items that aren't on the receipt.\n\n"
     "OCR text:\n"
 )
+
+
+def _normalise_items(parsed: dict) -> dict:
+    """Turn each line into a unit price plus a quantity.
+
+    The prompt asks for the line total and the quantity, both of which are
+    printed on the receipt, and the division happens here. Asking the model
+    for a per-unit price instead would put arithmetic in the least reliable
+    part of the pipeline -- and getting it wrong is invisible, since a
+    plausible number just becomes that product's recorded price.
+
+    `price` stays the response's field name and now means the unit price:
+    for the quantity-1 lines that are most of a receipt, nothing changes.
+    """
+    items = []
+    for index, item in enumerate(parsed.get("items") or [], start=1):
+        try:
+            quantity = int(float(item.get("quantity") or 1))
+        except (TypeError, ValueError):
+            quantity = 1
+        quantity = max(1, quantity)
+
+        # Older prompts (and a model that ignores the new schema) send
+        # `price` as the whole line; treat that as a line total of one unit.
+        raw_total = item.get("line_total")
+        if raw_total is None:
+            raw_total = item.get("price", 0)
+        try:
+            line_total = float(raw_total)
+        except (TypeError, ValueError):
+            line_total = 0.0
+
+        items.append(
+            {
+                "id": str(item.get("id") or index),
+                "raw_text": str(item.get("raw_text") or ""),
+                "quantity": quantity,
+                "price": round(line_total / quantity, 2),
+            }
+        )
+
+    return {
+        "store": parsed.get("store"),
+        "purchased_at": parsed.get("purchased_at"),
+        "items": items,
+    }
 
 
 async def _log_diagnostics(http_client: httpx.AsyncClient, headers: dict) -> None:
@@ -65,13 +115,15 @@ async def _log_diagnostics(http_client: httpx.AsyncClient, headers: dict) -> Non
 async def scan_receipt(image: UploadFile = File(...)) -> dict:
     """Line-item OCR: split one long receipt image into per-line entries.
 
-    Returns {"store", "purchased_at", "items": [{"id", "raw_text", "price"}]}
-    either way, so callers don't need to know whether OCR_MOCK_MODE is on.
+    Returns {"store", "purchased_at", "items": [{"id", "raw_text",
+    "quantity", "price"}]} either way, so callers don't need to know whether
+    OCR_MOCK_MODE is on. `price` is per unit; multiply by `quantity` for
+    what the line cost.
     """
     image_bytes = await image.read()
 
     if OCR_MOCK_MODE:
-        return SAMPLE_RECEIPT
+        return _normalise_items(SAMPLE_RECEIPT)
 
     if not TYPHOON_API_KEY:
         raise HTTPException(
@@ -154,4 +206,4 @@ async def scan_receipt(image: UploadFile = File(...)) -> dict:
             detail=f"Typhoon structuring returned an unparsable response: {exc}",
         ) from exc
 
-    return parsed
+    return _normalise_items(parsed)

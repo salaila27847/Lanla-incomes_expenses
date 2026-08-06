@@ -30,7 +30,9 @@ budgetRouter.get("/", async (_req, res) => {
   if (cycle) {
     for (const row of priceHistory) {
       if (row.date >= cycle.payday && row.date <= cycle.end) {
-        spentThisCycle[row.category] += row.price;
+        // price is per unit, so what was spent is the line total. Summing
+        // price alone undercounts every multi-unit purchase.
+        spentThisCycle[row.category] += row.price * row.quantity;
       }
     }
   }

@@ -17,8 +17,18 @@ Create a new Google Sheet with six tabs, each with an exact header row in row 1:
 |------|----------|-----------|
 
 **Tab `PriceHistory`**
-| Date | Store | MasterItemName | Category | Price |
-|------|-------|-----------------|----------|-------|
+| Date | Store | MasterItemName | Category | Price | Quantity | ID |
+|------|-------|-----------------|----------|-------|----------|-----|
+
+`Price` is **per unit** and `Quantity` multiplies it, so buying three of
+something records the unit price once rather than making that product look
+three times more expensive than it is. Blank `Quantity` counts as 1, which
+is why rows written before this column existed still read correctly.
+
+⚠️ **If your Sheet already has this tab**, add the two new columns by hand —
+`setUpTrackerSheet` never touches a tab that already exists. Until you do,
+scanning still works and every existing row reads fine, but nothing can be
+edited or deleted (`ID` is what identifies a row).
 
 **Tab `MustPay`**
 | ID | Name | Amount | Month | Status | PaidAt |

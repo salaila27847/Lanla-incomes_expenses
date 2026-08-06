@@ -17,11 +17,21 @@ pricesRouter.get("/", async (req, res) => {
     row.masterItemName.toLowerCase().includes(needle),
   );
 
-  const byStore = new Map<string, { masterItemName: string; price: number; date: string }[]>();
+  const byStore = new Map<
+    string,
+    { masterItemName: string; price: number; quantity: number; date: string }[]
+  >();
   for (const row of matches) {
     const store = row.store ?? NO_STORE_LABEL;
     const entries = byStore.get(store) ?? [];
-    entries.push({ masterItemName: row.masterItemName, price: row.price, date: row.date });
+    // Unit price on purpose: comparing a 3-pack's total against a single
+    // unit elsewhere is what makes a price history useless.
+    entries.push({
+      masterItemName: row.masterItemName,
+      price: row.price,
+      quantity: row.quantity,
+      date: row.date,
+    });
     byStore.set(store, entries);
   }
 

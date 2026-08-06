@@ -2,6 +2,7 @@ import { Router } from "express";
 import { cycleContaining } from "../cycleService";
 import { loadSettings } from "../settings";
 import {
+  lineTotal,
   appendMustPayItem,
   deleteMustPayItem,
   readMustPayItems,
@@ -31,9 +32,9 @@ budgetRouter.get("/", async (_req, res) => {
   if (cycle) {
     for (const row of priceHistory) {
       if (row.date >= cycle.payday && row.date <= cycle.end) {
-        // price is per unit, so what was spent is the line total. Summing
-        // price alone undercounts every multi-unit purchase.
-        spentThisCycle[row.category] += row.price * row.quantity;
+        // price is per unit and before any discount, so what was spent is
+        // neither of them on its own.
+        spentThisCycle[row.category] += lineTotal(row);
       }
     }
   }

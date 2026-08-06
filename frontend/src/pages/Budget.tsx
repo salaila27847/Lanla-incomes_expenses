@@ -57,6 +57,7 @@ interface Expense {
   category: "food" | "goods";
   price: number;
   quantity: number;
+  discount: number;
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3001";
@@ -351,7 +352,12 @@ export default function Budget() {
                       )}
                     </span>
                     <span className="shrink-0 tabular-nums">
-                      {(expense.price * expense.quantity).toLocaleString()} บาท
+                      {(expense.price * expense.quantity - expense.discount).toLocaleString()} บาท
+                      {expense.discount > 0 && (
+                        <span className="ml-1 text-xs text-emerald-400">
+                          (ลด {expense.discount.toLocaleString()})
+                        </span>
+                      )}
                     </span>
                   </button>
                 </li>
@@ -378,6 +384,7 @@ function ExpenseEditor({
 }) {
   const [price, setPrice] = useState(String(expense.price));
   const [quantity, setQuantity] = useState(expense.quantity);
+  const [discount, setDiscount] = useState(expense.discount ? String(expense.discount) : "");
   const [category, setCategory] = useState(expense.category);
 
   return (
@@ -418,6 +425,17 @@ function ExpenseEditor({
           className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-right text-sm"
         />
       </div>
+      <div className="flex items-center justify-end gap-2">
+        <label className="text-xs text-slate-500">ส่วนลด</label>
+        <input
+          value={discount}
+          onChange={(event) => setDiscount(event.target.value)}
+          inputMode="decimal"
+          placeholder="0"
+          aria-label="ส่วนลดของรายการนี้"
+          className="w-24 rounded-lg border border-slate-800 bg-slate-900 px-2 py-1.5 text-right text-sm"
+        />
+      </div>
       <div className="flex gap-2">
         <button
           type="button"
@@ -431,8 +449,15 @@ function ExpenseEditor({
         </button>
         <button
           type="button"
-          disabled={parseAmount(price) === null}
-          onClick={() => onSave({ price: parseAmount(price) ?? 0, quantity, category })}
+          disabled={parseAmount(price) === null || (discount !== "" && parseAmount(discount) === null)}
+          onClick={() =>
+            onSave({
+              price: parseAmount(price) ?? 0,
+              quantity,
+              category,
+              discount: discount === "" ? 0 : (parseAmount(discount) ?? 0),
+            })
+          }
           className="flex-1 rounded-lg bg-sky-600 py-2 text-sm disabled:opacity-50"
         >
           บันทึก

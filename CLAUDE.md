@@ -21,16 +21,18 @@ Monorepo with three independently deployable services, no shared build tooling b
 - `/controller`'s Sheets client (`src/sheets/client.ts`) covers all six tabs (`MasterItems`, `PriceHistory`, `MustPay`, `Cycles`, `Income`, `Settings`); its `/receipt/scan`, `/receipt/confirm`, `/budget`, `/prices`, `/dashboard`, `/income`, and `/qr` (a thin proxy to the backend) routes are real. Defaults to `SHEETS_MOCK_MODE=true` (in-memory lists stand in for the sheet tabs) since no Google Sheet or service account exists yet — see `SETUP.md` for that one-time manual setup.
 - `/frontend`'s `ReceiptReview` page (route `/scan`) has two modes — scan a receipt or type lines in by hand — and either way each line is reviewed with a quantity stepper, a unit price, and a master-item picker before saving. `Budget` shows the current pay cycle's spend against the food/goods caps (computed from `PriceHistory`) and a must-pay checklist (add via a name+amount form with autocomplete over previously-used names, mark paid with a tap — manual, not tied to receipt scanning). `Dashboard` is the annual view: twelve pay-cycle columns, rows for income by source / bills by name / food+goods from receipts, and summary rows for totals, net, and both account balances. It also owns the payday calendar and the budget settings. `PriceHistory` searches master item names (substring match) and shows results grouped by store, newest first. `SavingsQR` posts an amount and renders the returned QR image.
 
-## Unit price vs line total
+## Unit price, quantity, discount
 
-`PriceHistory.Price` is **per unit**; `Quantity` multiplies it. Which one to use is not a style choice:
+`PriceHistory.Price` is **per unit and before any discount**; `Quantity` multiplies it; `Discount` comes off the line. Which figure to use where is not a style choice:
 
-- **Anything summing money uses `price * quantity`** — `budget.ts` and `dashboard.ts`. These are the only two places, and both carry a comment saying so.
-- **Price comparison uses `price` alone** — `prices.ts`. A 3-pack's total isn't comparable to a single unit bought elsewhere, and comparing them is what would make the price history useless.
+- **Anything summing money uses `lineTotal(row)`** (`price * quantity - discount`, exported from `sheets/client.ts`) — `budget.ts` and `dashboard.ts`. These are the only two places.
+- **Price comparison uses `price` alone** — `prices.ts`. A 3-pack's total isn't comparable to a single unit bought elsewhere, and a promo that won't be there next time shouldn't become what a product costs. `netPrice` rides along for when the discount is the interesting part.
 
-OCR is asked for `quantity` and `line_total` (both printed on the receipt) and `_normalise_items` in `ocr.py` does the division. Asking the model for a per-unit price instead puts arithmetic in the least reliable part of the pipeline, and a plausible wrong price is invisible — it just becomes that product's recorded price.
+OCR is asked for `quantity` and `line_total` (both printed on the receipt) and `_normalise_items` in `ocr.py` does the division. Asking the model for a per-unit price instead puts arithmetic in the least reliable part of the pipeline, and a plausible wrong price is invisible — it just becomes that product's recorded price. Discounts come back as positive amounts; receipts print them negative and `_positive_amount` strips the sign, because a negative discount would *add* to the bill.
 
-A blank `Quantity` reads as 1, so rows written before the column existed still total correctly.
+A **bill-level discount** — one that belongs to no single product — is its own row: `price` 0 with the amount in `discount`, so it totals negative with no negative price anywhere. `isDiscountOnly` identifies those and `/prices` skips them; a genuinely free item (price 0, no discount) is still a real data point and stays.
+
+Blank `Quantity` reads as 1 and blank `Discount` as 0, so rows written before those columns existed still total correctly.
 
 ## Master item matching
 

@@ -247,3 +247,57 @@ describe("DELETE /expenses/:id", () => {
     expect((await request(app).delete("/expenses/nope")).status).toBe(404);
   });
 });
+
+describe("discounts", () => {
+  it("stores a per-line discount", async () => {
+    const { app } = await buildApp();
+
+    const { body } = await request(app).post("/expenses").send({ ...VALID, discount: 5 });
+
+    expect(body).toMatchObject({ price: 15, quantity: 3, discount: 5 });
+  });
+
+  it("defaults to no discount", async () => {
+    const { app } = await buildApp();
+
+    const { body } = await request(app).post("/expenses").send(VALID);
+
+    expect(body.discount).toBe(0);
+  });
+
+  it("accepts a bill-level discount row", async () => {
+    // price 0 with a discount larger than the line: the one case where a
+    // discount legitimately exceeds what the row is worth.
+    const { app } = await buildApp();
+
+    const response = await request(app)
+      .post("/expenses")
+      .send({ ...VALID, masterItemName: "ส่วนลดท้ายบิล", price: 0, quantity: 1, discount: 50 });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toMatchObject({ price: 0, discount: 50 });
+  });
+
+  it("can be edited on its own", async () => {
+    const { app, sheets } = await buildApp();
+    const row = await sheets.appendPriceHistoryRow({ ...VALID, category: "food" });
+
+    await request(app).put(`/expenses/${row.id}`).send({ discount: 7 });
+
+    const [stored] = await sheets.readPriceHistory();
+    expect(stored.discount).toBe(7);
+    expect(stored.price).toBe(15); // untouched
+  });
+
+  it.each([
+    ["a negative discount", { discount: -1 }],
+    ["a non-numeric discount", { discount: "ลดเยอะ" }],
+  ])("rejects %s", async (_label, patch) => {
+    const { app, sheets } = await buildApp();
+
+    const response = await request(app).post("/expenses").send({ ...VALID, ...patch });
+
+    expect(response.status).toBe(400);
+    expect(await sheets.readPriceHistory()).toEqual([]);
+  });
+});

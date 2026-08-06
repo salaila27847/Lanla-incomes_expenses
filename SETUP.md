@@ -17,18 +17,28 @@ Create a new Google Sheet with six tabs, each with an exact header row in row 1:
 |------|----------|-----------|
 
 **Tab `PriceHistory`**
-| Date | Store | MasterItemName | Category | Price | Quantity | ID |
-|------|-------|-----------------|----------|-------|----------|-----|
+| Date | Store | MasterItemName | Category | Price | Quantity | ID | Discount |
+|------|-------|-----------------|----------|-------|----------|-----|----------|
 
-`Price` is **per unit** and `Quantity` multiplies it, so buying three of
-something records the unit price once rather than making that product look
-three times more expensive than it is. Blank `Quantity` counts as 1, which
-is why rows written before this column existed still read correctly.
+`Price` is **per unit and before any discount**, `Quantity` multiplies it,
+and `Discount` comes off the line as a whole. **What was paid is
+`Price × Quantity − Discount`.**
 
-⚠️ **If your Sheet already has this tab**, add the two new columns by hand —
-`setUpTrackerSheet` never touches a tab that already exists. Until you do,
-scanning still works and every existing row reads fine, but nothing can be
-edited or deleted (`ID` is what identifies a row).
+Keeping the discount separate is deliberate: the price history's job is what
+a product normally costs, and a promo that won't be there next time
+shouldn't become its remembered price. Blank `Quantity` counts as 1 and
+blank `Discount` as 0, so rows written before those columns existed still
+read correctly.
+
+A discount off the **whole bill** is stored as its own row — `Price` 0 with
+the amount in `Discount`, so it totals to a negative without any negative
+price existing anywhere. Rows like that are skipped by the price search.
+
+⚠️ **If your Sheet already has this tab**, add the missing columns by hand —
+`setUpTrackerSheet` never touches a tab that already exists, and
+`checkTrackerSheet` will tell you which ones are missing. Until you do,
+scanning still works and existing rows read fine, but rows can't be edited
+or deleted (`ID` identifies a row) and discounts aren't recorded.
 
 **Tab `MustPay`**
 | ID | Name | Amount | Month | Status | PaidAt |

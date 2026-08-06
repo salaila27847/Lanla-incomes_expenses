@@ -10,6 +10,7 @@ import {
 } from "../cycles";
 import { loadSettings, saveSettings, SETTING_KEYS, type SettingField } from "../settings";
 import {
+  lineTotal,
   readCycleRows,
   readIncome,
   readMustPayItems,
@@ -114,8 +115,8 @@ dashboardRouter.get("/", async (req, res) => {
   for (const row of priceHistory) {
     const cycle = cycleForDate(row.date, cycles);
     if (!cycle) continue;
-    // Line total, not unit price — see the same note in budget.ts.
-    add(row.category === "food" ? foodAmounts : goodsAmounts, cycle.key, row.price * row.quantity);
+    // What was paid, not the unit price — see the same note in budget.ts.
+    add(row.category === "food" ? foodAmounts : goodsAmounts, cycle.key, lineTotal(row));
   }
 
   const expenseTotals: AmountsByCycle = {};

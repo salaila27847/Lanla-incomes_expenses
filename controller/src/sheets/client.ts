@@ -119,16 +119,33 @@ export interface PriceHistoryRow {
   date: string;
   store: string | null;
   masterItemName: string;
-  /** Per unit. Multiply by `quantity` for what the line cost — see the
-   *  Price/Quantity note in SETUP.md. */
+  /** Per unit, before any discount. Kept at the printed price so the price
+   *  history stays comparable across stores — a promo you can't count on
+   *  next time shouldn't become the product's remembered price. */
   price: number;
   quantity: number;
+  /** Taken off this line as a whole, not per unit. What was actually paid
+   *  is `price * quantity - discount`. A row whose price is 0 and whose
+   *  discount isn't is a bill-level discount rather than a product. */
+  discount: number;
   category: ItemCategory;
 }
 
-export type PriceHistoryInput = Omit<PriceHistoryRow, "id" | "quantity"> & {
+export type PriceHistoryInput = Omit<PriceHistoryRow, "id" | "quantity" | "discount"> & {
   quantity?: number;
+  discount?: number;
 };
+
+/** What the line actually cost. The only correct way to sum money here. */
+export function lineTotal(row: Pick<PriceHistoryRow, "price" | "quantity" | "discount">): number {
+  return row.price * row.quantity - row.discount;
+}
+
+/** True for a bill-level discount row: an amount off the whole receipt that
+ *  no single product accounts for. Not a price, so price history skips it. */
+export function isDiscountOnly(row: Pick<PriceHistoryRow, "price" | "discount">): boolean {
+  return row.price === 0 && row.discount > 0;
+}
 
 export type MustPayStatus = "unpaid" | "paid";
 
@@ -197,16 +214,22 @@ function priceHistoryValues(row: PriceHistoryRow): unknown[] {
     row.price,
     row.quantity,
     row.id,
+    row.discount,
   ];
 }
 
 export async function appendPriceHistoryRow(input: PriceHistoryInput): Promise<PriceHistoryRow> {
-  const row: PriceHistoryRow = { ...input, id: randomUUID(), quantity: input.quantity ?? 1 };
+  const row: PriceHistoryRow = {
+    ...input,
+    id: randomUUID(),
+    quantity: input.quantity ?? 1,
+    discount: input.discount ?? 0,
+  };
   if (MOCK_MODE) {
     mockPriceHistory.push(row);
     return row;
   }
-  await appendRow("PriceHistory!A:G", priceHistoryValues(row));
+  await appendRow("PriceHistory!A:H", priceHistoryValues(row));
   return row;
 }
 
@@ -214,7 +237,7 @@ export async function readPriceHistory(): Promise<PriceHistoryRow[]> {
   if (MOCK_MODE) {
     return mockPriceHistory;
   }
-  const rows = await readRange("PriceHistory!A2:G");
+  const rows = await readRange("PriceHistory!A2:H");
   return rows
     .map((row, index) => ({ row, rowNumber: index + 2 }))
     .filter(({ row }) => row[0])
@@ -232,6 +255,10 @@ export async function readPriceHistory(): Promise<PriceHistoryRow[]> {
       // Blank means one, matching every row written before the column
       // existed. Zero would erase the line from every total.
       quantity: toOptionalNumber(row[5]) ?? 1,
+      // Blank means no discount, which is what every row written before
+      // this column existed is. toNumber already reads blank as 0, so
+      // unlike quantity there's no "not entered" case to preserve here.
+      discount: toNumber(row[7]),
     }));
 }
 
@@ -266,9 +293,11 @@ export async function updatePriceHistoryRow(
   if (rowNumber === null) return null;
   // A pre-ID row keeps its row: handle rather than gaining a UUID, so the
   // handle the caller is holding stays valid.
-  await updateRange(`PriceHistory!A${rowNumber}:G${rowNumber}`, [
-    ...priceHistoryValues(merged).slice(0, 6),
+  const values = priceHistoryValues(merged);
+  await updateRange(`PriceHistory!A${rowNumber}:H${rowNumber}`, [
+    ...values.slice(0, 6),
     id.startsWith("row:") ? "" : id,
+    values[7],
   ]);
   return merged;
 }
@@ -289,7 +318,7 @@ export async function deletePriceHistoryRow(id: string): Promise<boolean> {
   const rowNumber = await priceHistoryRowNumber(id);
   if (rowNumber === null) return false;
   // Blanked, not removed — see the note on `row:<n>` above, and deleteIncome.
-  await updateRange(`PriceHistory!A${rowNumber}:G${rowNumber}`, ["", "", "", "", "", "", ""]);
+  await updateRange(`PriceHistory!A${rowNumber}:H${rowNumber}`, ["", "", "", "", "", "", "", ""]);
   return true;
 }
 

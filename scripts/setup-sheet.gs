@@ -34,11 +34,14 @@ var TABS = [
     textColumns: [],
   },
   {
-    // Price is per unit and Quantity multiplies it, so a 3-pack records
-    // the unit price rather than making the product look 3x pricier.
-    // ID is what lets a row be edited or deleted later.
+    // Price is per unit and BEFORE any discount, so the price history
+    // keeps what a product normally costs; Quantity multiplies it and
+    // Discount comes off the line. What was paid is
+    // Price * Quantity - Discount. ID is what lets a row be edited later.
     name: 'PriceHistory',
-    headers: ['Date', 'Store', 'MasterItemName', 'Category', 'Price', 'Quantity', 'ID'],
+    headers: [
+      'Date', 'Store', 'MasterItemName', 'Category', 'Price', 'Quantity', 'ID', 'Discount',
+    ],
     textColumns: [1, 7], // Date, ID
   },
   {

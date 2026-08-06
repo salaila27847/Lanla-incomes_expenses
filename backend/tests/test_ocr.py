@@ -37,7 +37,8 @@ class TestMockMode:
             "id": "1",
             "raw_text": "นมสดUHT250ml",
             "quantity": 3,
-            "price": 15.0,  # 45.00 for three
+            "price": 15.0,  # 45.00 for three, before the discount
+            "discount": 5.0,
         }
 
     def test_makes_no_network_calls(self, client, receipt_upload, monkeypatch):
@@ -130,7 +131,10 @@ class TestRealModeResponses:
         assert response.json() == {
             "store": "Lotus",
             "purchased_at": "2026-08-04",
-            "items": [{"id": "1", "raw_text": "ขนมปัง", "quantity": 1, "price": 29.0}],
+            "items": [
+                {"id": "1", "raw_text": "ขนมปัง", "quantity": 1, "price": 29.0, "discount": 0.0}
+            ],
+            "bill_discount": 0.0,
         }
 
     def test_unwraps_natural_text_from_stage_ones_json(self, client, typhoon, receipt_upload):
@@ -407,7 +411,13 @@ class TestQuantity:
             {"id": "1", "raw_text": "ขนมปัง", "price": 29.0},
         )
 
-        assert item == {"id": "1", "raw_text": "ขนมปัง", "quantity": 1, "price": 29.0}
+        assert item == {
+            "id": "1",
+            "raw_text": "ขนมปัง",
+            "quantity": 1,
+            "price": 29.0,
+            "discount": 0.0,
+        }
 
     def test_an_unparsable_total_becomes_zero_rather_than_crashing(
         self, client, typhoon, receipt_upload
@@ -426,7 +436,13 @@ class TestQuantity:
             {"id": "1", "raw_text": "นมสด", "quantity": "3", "line_total": "45.00"},
         )
 
-        assert item == {"id": "1", "raw_text": "นมสด", "quantity": 3, "price": 15.0}
+        assert item == {
+            "id": "1",
+            "raw_text": "นมสด",
+            "quantity": 3,
+            "price": 15.0,
+            "discount": 0.0,
+        }
 
     def test_fills_in_a_missing_id_from_the_line_order(self, client, typhoon, receipt_upload):
         typhoon.chat = httpx.Response(
@@ -457,3 +473,126 @@ class TestQuantity:
         body = client.post("/ocr/", files=receipt_upload).json()
 
         assert body["items"] == []
+
+
+class TestDiscounts:
+    """Receipts discount lines individually and the bill as a whole.
+
+    Both are kept out of the unit price on purpose: the price history's job
+    is what a product normally costs, and a promo that won't be there next
+    time shouldn't become that. What was paid is price * quantity - discount.
+    """
+
+    def scan(self, client, typhoon, receipt_upload, parsed):
+        typhoon.chat = httpx.Response(200, json=FakeTyphoon.chat_body(parsed))
+        return client.post("/ocr/", files=receipt_upload).json()
+
+    def one_item(self, client, typhoon, receipt_upload, item, **extra):
+        body = self.scan(
+            client, typhoon, receipt_upload,
+            {"store": "Lotus", "purchased_at": None, "items": [item], **extra},
+        )
+        return body["items"][0], body
+
+    def test_keeps_the_printed_price_and_reports_the_discount_beside_it(
+        self, client, typhoon, receipt_upload
+    ):
+        item, _ = self.one_item(
+            client, typhoon, receipt_upload,
+            {"id": "1", "raw_text": "นมสด", "quantity": 3, "line_total": 45.0, "discount": 5.0},
+        )
+
+        # Not 13.33: folding the discount into the unit price is what would
+        # make the price history remember a promo as the product's price.
+        assert item["price"] == 15.0
+        assert item["discount"] == 5.0
+
+    def test_strips_the_sign_a_receipt_prints(self, client, typhoon, receipt_upload):
+        # Receipts show discounts as negatives and the model copies that
+        # about half the time. A negative discount would *add* to the bill.
+        item, _ = self.one_item(
+            client, typhoon, receipt_upload,
+            {"id": "1", "raw_text": "นมสด", "quantity": 1, "line_total": 15.0, "discount": -5.0},
+        )
+
+        assert item["discount"] == 5.0
+
+    def test_no_discount_is_zero_not_missing(self, client, typhoon, receipt_upload):
+        item, _ = self.one_item(
+            client, typhoon, receipt_upload,
+            {"id": "1", "raw_text": "นมสด", "quantity": 1, "line_total": 15.0},
+        )
+
+        assert item["discount"] == 0.0
+
+    def test_an_unreadable_discount_is_no_discount(self, client, typhoon, receipt_upload):
+        # Safe direction: leave the line at its printed price rather than
+        # invent a saving the receipt doesn't support.
+        item, _ = self.one_item(
+            client, typhoon, receipt_upload,
+            {"id": "1", "raw_text": "นมสด", "quantity": 1, "line_total": 15.0, "discount": "ลด"},
+        )
+
+        assert item["discount"] == 0.0
+
+    def test_reports_a_bill_level_discount(self, client, typhoon, receipt_upload):
+        _, body = self.one_item(
+            client, typhoon, receipt_upload,
+            {"id": "1", "raw_text": "นมสด", "quantity": 1, "line_total": 15.0},
+            bill_discount=20.0,
+        )
+
+        assert body["bill_discount"] == 20.0
+
+    def test_a_bill_discount_is_not_folded_into_any_line(self, client, typhoon, receipt_upload):
+        # It belongs to no single product, so spreading it across lines
+        # would corrupt every unit price on the receipt.
+        item, body = self.one_item(
+            client, typhoon, receipt_upload,
+            {"id": "1", "raw_text": "นมสด", "quantity": 1, "line_total": 15.0},
+            bill_discount=20.0,
+        )
+
+        assert item["price"] == 15.0
+        assert item["discount"] == 0.0
+        assert body["bill_discount"] == 20.0
+
+    def test_a_missing_bill_discount_is_zero(self, client, typhoon, receipt_upload):
+        _, body = self.one_item(
+            client, typhoon, receipt_upload,
+            {"id": "1", "raw_text": "นมสด", "quantity": 1, "line_total": 15.0},
+        )
+
+        assert body["bill_discount"] == 0.0
+
+    def test_strips_the_sign_on_a_bill_discount_too(self, client, typhoon, receipt_upload):
+        _, body = self.one_item(
+            client, typhoon, receipt_upload,
+            {"id": "1", "raw_text": "นมสด", "quantity": 1, "line_total": 15.0},
+            bill_discount=-20.0,
+        )
+
+        assert body["bill_discount"] == 20.0
+
+    def test_a_discount_string_with_a_currency_sign_is_ignored_not_guessed(
+        self, client, typhoon, receipt_upload
+    ):
+        item, _ = self.one_item(
+            client, typhoon, receipt_upload,
+            {"id": "1", "raw_text": "นมสด", "quantity": 1, "line_total": 15.0, "discount": "5 บาท"},
+        )
+
+        assert item["discount"] == 0.0
+
+    def test_the_prompt_tells_the_model_not_to_list_discounts_as_items(
+        self, client, typhoon, receipt_upload
+    ):
+        # Without this a "ส่วนลด -20.00" line comes back as a product, and
+        # the user has to name and categorise a discount as if it were food.
+        client.post("/ocr/", files=receipt_upload)
+
+        prompt = json.loads(typhoon.request_to("/chat/completions").content)["messages"][0][
+            "content"
+        ]
+        assert "bill_discount" in prompt
+        assert "never list a discount" in prompt

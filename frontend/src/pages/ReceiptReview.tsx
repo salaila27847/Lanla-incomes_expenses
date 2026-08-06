@@ -10,11 +10,13 @@ type ReceiptCategory = "food" | "goods";
 interface ReceiptLineItem {
   id: string;
   rawText: string;
-  /** The raw text in the price box, per unit — a controlled numeric input
-   *  has to hold what was typed, or "12." loses its decimal point the
-   *  moment it's pressed. Parse it with parseAmount, never Number(). */
+  /** The raw text in the price box, per unit and before any discount — a
+   *  controlled numeric input has to hold what was typed, or "12." loses
+   *  its decimal point the moment it's pressed. Parse with parseAmount. */
   price: string;
   quantity: number;
+  /** Raw text too. Taken off this line as a whole, not per unit. */
+  discount: string;
   category: ReceiptCategory;
   masterItemName: string;
   candidates: MatchCandidate[];
@@ -27,6 +29,7 @@ interface ScanResponseItem {
   raw_text: string;
   price: number;
   quantity: number;
+  discount: number;
   matched: boolean;
   master_item_name: string | null;
   category: ReceiptCategory | null;
@@ -38,6 +41,7 @@ interface ScanResponse {
   store: string | null;
   purchased_at: string | null;
   items: ScanResponseItem[];
+  bill_discount: number;
   master_items: MasterItem[];
 }
 
@@ -46,8 +50,25 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3001
 type Status = "idle" | "scanning" | "reviewing" | "saving" | "saved" | "error";
 type Mode = "scan" | "manual";
 
+/** The master item a whole-bill discount is filed under. It's a row in the
+ *  same tab as everything else, so it needs a name — but it isn't a price,
+ *  and the price history filters it out. */
+const BILL_DISCOUNT_NAME = "ส่วนลดท้ายบิล";
+
 function today(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+/** "3 × 15.00 − 5.00 = 40.00 บาท" — spelled out so a wrong discount is
+ *  visible before it's saved rather than only in the cycle total. */
+function lineSummary(item: ReceiptLineItem): string {
+  const unit = amountOr0(item.price);
+  const discount = amountOr0(item.discount);
+  const net = unit * item.quantity - discount;
+  if (item.quantity === 1 && discount === 0) return `${formatMoney(unit)} บาท`;
+  const parts = [item.quantity > 1 ? `${item.quantity} × ${formatMoney(unit)}` : formatMoney(unit)];
+  if (discount > 0) parts.push(`− ${formatMoney(discount)}`);
+  return `${parts.join(" ")} = ${formatMoney(net)} บาท`;
 }
 
 export default function ReceiptReview() {
@@ -95,12 +116,32 @@ export default function ReceiptReview() {
           rawText: item.raw_text,
           price: String(item.price),
           quantity: item.quantity ?? 1,
+          discount: item.discount ? String(item.discount) : "",
           category: item.category ?? "food",
           masterItemName: item.master_item_name ?? "",
           candidates: item.candidates ?? [],
           autoMatched: item.matched,
         })),
       );
+      // A discount off the whole receipt belongs to no single product, so
+      // it gets its own line rather than being spread across the others —
+      // spreading it would corrupt every unit price on the bill.
+      if (result.bill_discount > 0) {
+        setItems((prev) => [
+          ...prev,
+          {
+            id: `bill-discount-${Date.now()}`,
+            rawText: "ส่วนลดท้ายบิล",
+            price: "0",
+            quantity: 1,
+            discount: String(result.bill_discount),
+            category: "food",
+            masterItemName: BILL_DISCOUNT_NAME,
+            candidates: [],
+            autoMatched: false,
+          },
+        ]);
+      }
       setStatus("reviewing");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ");
@@ -119,6 +160,7 @@ export default function ReceiptReview() {
         id: `manual-${Date.now()}-${prev.length}`,
         rawText: "",
         price: "",
+        discount: "",
         quantity: 1,
         category: "food",
         masterItemName: "",
@@ -135,7 +177,10 @@ export default function ReceiptReview() {
     items.every(
       (item) => item.masterItemName.trim().length > 0 && parseAmount(item.price) !== null,
     );
-  const total = items.reduce((sum, item) => sum + amountOr0(item.price) * item.quantity, 0);
+  const total = items.reduce(
+    (sum, item) => sum + amountOr0(item.price) * item.quantity - amountOr0(item.discount),
+    0,
+  );
 
   async function handleSave() {
     setStatus("saving");
@@ -151,6 +196,7 @@ export default function ReceiptReview() {
             raw_text: item.rawText || item.masterItemName,
             price: amountOr0(item.price),
             quantity: item.quantity,
+            discount: amountOr0(item.discount),
             master_item_name: item.masterItemName.trim(),
             category: item.category,
           })),
@@ -329,14 +375,20 @@ export default function ReceiptReview() {
                   />
                 </div>
 
+                <div className="flex items-center justify-end gap-2">
+                  <label className="text-xs text-slate-500">ส่วนลด</label>
+                  <input
+                    value={item.discount}
+                    onChange={(event) => patchItem(item.id, { discount: event.target.value })}
+                    inputMode="decimal"
+                    placeholder="0"
+                    aria-label="ส่วนลดของรายการนี้"
+                    className="w-24 rounded-lg border border-slate-800 bg-slate-900 px-2 py-1.5 text-right text-sm"
+                  />
+                </div>
+
                 <p className="text-right text-xs text-slate-500">
-                  {parseAmount(item.price) === null
-                    ? "ใส่ราคา"
-                    : item.quantity > 1
-                      ? `${item.quantity} × ${formatMoney(amountOr0(item.price))} = ${formatMoney(
-                          amountOr0(item.price) * item.quantity,
-                        )} บาท`
-                      : `${formatMoney(amountOr0(item.price))} บาท`}
+                  {parseAmount(item.price) === null ? "ใส่ราคา" : lineSummary(item)}
                 </p>
               </li>
             ))}

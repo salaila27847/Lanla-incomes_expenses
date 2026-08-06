@@ -20,15 +20,37 @@ STRUCTURE_PROMPT_PREFIX = (
     "no commentary) in this exact shape:\n"
     '{"store": "<store name or null>", "purchased_at": "<YYYY-MM-DD or null>", '
     '"items": [{"id": "<1-based index as string>", "raw_text": "<item name '
-    'exactly as printed>", "quantity": <number>, "line_total": <number>}]}\n'
+    'exactly as printed>", "quantity": <number>, "line_total": <number>, '
+    '"discount": <number>}], "bill_discount": <number>}\n'
     "quantity is how many units of that item were bought (1 if the receipt "
-    "doesn't say). line_total is the amount charged for the whole line, "
-    "exactly as printed -- copy the number, do not compute a per-unit price "
-    "or add lines together.\n"
+    "doesn't say). line_total is the amount charged for the whole line "
+    "BEFORE any discount, exactly as printed -- copy the number, do not "
+    "compute a per-unit price or add lines together.\n"
+    "discount is an amount taken off that one item, as a positive number "
+    "(0 if none). A discount printed directly under an item belongs to that "
+    "item -- do NOT list it as an item of its own.\n"
+    "bill_discount is a discount applied to the whole receipt rather than to "
+    "any single item, as a positive number (0 if none). Coupons, member "
+    "discounts and totals labelled ส่วนลดท้ายบิล go here.\n"
     "Include every line that has a price, even if the item name is unclear "
-    "or abbreviated. Do not invent items that aren't on the receipt.\n\n"
+    "or abbreviated. Do not invent items that aren't on the receipt, and "
+    "never list a discount, a subtotal, a total, VAT, or change as an item.\n\n"
     "OCR text:\n"
 )
+
+
+def _positive_amount(raw) -> float:
+    """A discount as a non-negative number, however the model wrote it.
+
+    Receipts print discounts as negatives ("-20.00") and the model copies
+    that about half the time, so the sign is taken off rather than trusted.
+    Anything unparsable is no discount, which is the safe direction: it
+    leaves the line at its printed price instead of inventing a saving.
+    """
+    try:
+        return round(abs(float(raw)), 2)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _normalise_items(parsed: dict) -> dict:
@@ -42,6 +64,12 @@ def _normalise_items(parsed: dict) -> dict:
 
     `price` stays the response's field name and now means the unit price:
     for the quantity-1 lines that are most of a receipt, nothing changes.
+
+    Discounts come back as positive amounts -- per line, plus a
+    `bill_discount` for anything taken off the receipt as a whole. Both are
+    kept out of the unit price so the price history keeps the printed price:
+    a promo that won't be there next time shouldn't become what a product
+    costs. What was paid is price * quantity - discount.
     """
     items = []
     for index, item in enumerate(parsed.get("items") or [], start=1):
@@ -67,6 +95,7 @@ def _normalise_items(parsed: dict) -> dict:
                 "raw_text": str(item.get("raw_text") or ""),
                 "quantity": quantity,
                 "price": round(line_total / quantity, 2),
+                "discount": _positive_amount(item.get("discount")),
             }
         )
 
@@ -74,6 +103,7 @@ def _normalise_items(parsed: dict) -> dict:
         "store": parsed.get("store"),
         "purchased_at": parsed.get("purchased_at"),
         "items": items,
+        "bill_discount": _positive_amount(parsed.get("bill_discount")),
     }
 
 

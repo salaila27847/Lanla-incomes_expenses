@@ -2,9 +2,13 @@ import { useEffect, useState } from "react";
 
 interface PriceEntry {
   masterItemName: string;
-  /** Per unit — what makes one store comparable to another. */
+  /** Per unit and before discount — what makes one store comparable to
+   *  another, and what the product costs when there is no promo on. */
   price: number;
   quantity: number;
+  discount: number;
+  /** Per unit after the line's discount: what was actually paid. */
+  netPrice: number;
   date: string;
 }
 
@@ -102,6 +106,11 @@ export default function PriceHistory() {
                       {/* Per unit, so a 3-pack is comparable to a single
                           bought elsewhere. The count is context, not price. */}
                       <span className="text-xs text-slate-500">/ชิ้น</span>
+                      {entry.discount > 0 && (
+                        <span className="ml-1 text-xs text-emerald-400">
+                          จ่าย {entry.netPrice.toFixed(2)}
+                        </span>
+                      )}
                       {entry.quantity > 1 && (
                         <span className="ml-1 text-xs text-slate-500">(ซื้อ {entry.quantity})</span>
                       )}

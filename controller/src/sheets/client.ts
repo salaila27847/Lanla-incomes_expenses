@@ -348,6 +348,23 @@ export async function updateMustPayStatus(id: string, status: MustPayStatus): Pr
   await updateRange(`MustPay!E${rowNumber}:F${rowNumber}`, [status, paidAt ?? ""]);
 }
 
+export async function deleteMustPayItem(id: string): Promise<boolean> {
+  if (MOCK_MODE) {
+    const index = mockMustPayItems.findIndex((item) => item.id === id);
+    if (index === -1) return false;
+    mockMustPayItems.splice(index, 1);
+    return true;
+  }
+
+  const rowNumber = await findRowNumber("MustPay!A2:A", id);
+  if (rowNumber === null) return false;
+  // Blanked, not removed, like every other delete here — readMustPayItems
+  // skips rows with no ID, and leaving row numbers stable keeps concurrent
+  // reads from landing on the wrong row.
+  await updateRange(`MustPay!A${rowNumber}:F${rowNumber}`, ["", "", "", "", "", ""]);
+  return true;
+}
+
 // --- Cycles -----------------------------------------------------------
 // One row per pay cycle: the payday the user entered (they know the whole
 // year in advance) and the savings-account balance they read off their

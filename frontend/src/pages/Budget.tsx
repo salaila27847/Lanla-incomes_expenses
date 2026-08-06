@@ -65,6 +65,7 @@ export default function Budget() {
   const [recurringNames, setRecurringNames] = useState<RecurringName[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [newName, setNewName] = useState("");
@@ -158,6 +159,20 @@ export default function Budget() {
     }
   }
 
+  async function handleDeleteMustPay(id: string) {
+    setErrorMessage(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/budget/must-pay/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error(`ลบรายการไม่สำเร็จ (${response.status})`);
+      setConfirmingDeleteId(null);
+      await loadBudget();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ");
+    }
+  }
+
   async function handleMarkPaid(id: string) {
     setErrorMessage(null);
     try {
@@ -215,23 +230,57 @@ export default function Budget() {
           <p className="mt-2 text-sm text-slate-500">ไม่มีรายการค้างจ่ายรอบนี้</p>
         ) : (
           <ul className="mt-2 divide-y divide-slate-800">
-            {budget.mustPay.map((item) => (
-              <li key={item.id} className="flex items-center justify-between py-2 text-sm">
-                <span>{item.name}</span>
-                <span>{item.amount.toLocaleString()} บาท</span>
-                {item.status === "paid" ? (
-                  <span>🟢 จ่ายแล้ว</span>
-                ) : (
+            {budget.mustPay.map((item) =>
+              confirmingDeleteId === item.id ? (
+                <li key={item.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+                  <span className="min-w-0 flex-1 truncate text-slate-400">
+                    ลบ “{item.name}”?
+                  </span>
                   <button
                     type="button"
-                    onClick={() => handleMarkPaid(item.id)}
-                    className="rounded-full bg-slate-800 px-3 py-1"
+                    onClick={() => setConfirmingDeleteId(null)}
+                    className="shrink-0 rounded-full bg-slate-800 px-3 py-1.5"
                   >
-                    จ่ายแล้ว
+                    ยกเลิก
                   </button>
-                )}
-              </li>
-            ))}
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteMustPay(item.id)}
+                    className="shrink-0 rounded-full bg-red-700 px-3 py-1.5"
+                  >
+                    ลบ
+                  </button>
+                </li>
+              ) : (
+                <li key={item.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+                  <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                  <span className="shrink-0 tabular-nums">
+                    {item.amount.toLocaleString()} บาท
+                  </span>
+                  {item.status === "paid" ? (
+                    <span className="shrink-0">🟢 จ่ายแล้ว</span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleMarkPaid(item.id)}
+                      className="shrink-0 rounded-full bg-slate-800 px-3 py-1.5"
+                    >
+                      จ่ายแล้ว
+                    </button>
+                  )}
+                  {/* Two taps to delete: the list is typed in by hand, so a
+                      stray tap on a crowded row shouldn't lose a bill. */}
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingDeleteId(item.id)}
+                    aria-label={`ลบ ${item.name}`}
+                    className="shrink-0 px-2 py-1.5 text-slate-500"
+                  >
+                    ✕
+                  </button>
+                </li>
+              ),
+            )}
           </ul>
         )}
 

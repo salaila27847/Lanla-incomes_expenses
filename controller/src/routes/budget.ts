@@ -3,6 +3,7 @@ import { cycleContaining } from "../cycleService";
 import { loadSettings } from "../settings";
 import {
   appendMustPayItem,
+  deleteMustPayItem,
   readMustPayItems,
   readPriceHistory,
   updateMustPayStatus,
@@ -80,4 +81,14 @@ budgetRouter.post("/must-pay", async (req, res) => {
 budgetRouter.post("/must-pay/:id/mark-paid", async (req, res) => {
   await updateMustPayStatus(req.params.id, "paid");
   res.json({ success: true, id: req.params.id, status: "paid" });
+});
+
+// A bill added twice, or under the wrong name, was otherwise stuck on the
+// checklist for good — the list is added to by hand, so it collects typos.
+budgetRouter.delete("/must-pay/:id", async (req, res) => {
+  if (!(await deleteMustPayItem(req.params.id))) {
+    res.status(404).json({ error: "must-pay item not found" });
+    return;
+  }
+  res.json({ success: true, id: req.params.id });
 });

@@ -300,3 +300,59 @@ describe("quantity", () => {
     expect(body.spentThisCycle.food).toBe(29);
   });
 });
+
+describe("DELETE /budget/must-pay/:id", () => {
+  it("removes only the targeted item", async () => {
+    // The checklist is typed in by hand, so it collects duplicates and
+    // typos; before this they were stuck on it for good.
+    const { app, sheets } = await buildApp();
+    const first = await sheets.appendMustPayItem({
+      name: "ค่าไฟ",
+      amount: 1180,
+      month: THIS_CYCLE,
+    });
+    await sheets.appendMustPayItem({ name: "ค่าไฟ", amount: 1180, month: THIS_CYCLE });
+
+    const response = await request(app).delete(`/budget/must-pay/${first.id}`);
+
+    expect(response.status).toBe(200);
+    const remaining = await sheets.readMustPayItems();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].id).not.toBe(first.id);
+  });
+
+  it("removes a paid item too", async () => {
+    // Marking it paid is what usually reveals the duplicate.
+    const { app, sheets } = await buildApp();
+    const item = await sheets.appendMustPayItem({
+      name: "ค่าไฟ",
+      amount: 1180,
+      month: THIS_CYCLE,
+    });
+    await sheets.updateMustPayStatus(item.id, "paid");
+
+    await request(app).delete(`/budget/must-pay/${item.id}`);
+
+    expect(await sheets.readMustPayItems()).toEqual([]);
+  });
+
+  it("404s for an unknown id", async () => {
+    const { app } = await buildApp();
+
+    expect((await request(app).delete("/budget/must-pay/nope")).status).toBe(404);
+  });
+
+  it("drops it from the checklist the page reads", async () => {
+    const { app, sheets } = await buildApp();
+    const item = await sheets.appendMustPayItem({
+      name: "ค่าไฟ",
+      amount: 1180,
+      month: THIS_CYCLE,
+    });
+
+    await request(app).delete(`/budget/must-pay/${item.id}`);
+    const { body } = await request(app).get("/budget");
+
+    expect(body.mustPay).toEqual([]);
+  });
+});

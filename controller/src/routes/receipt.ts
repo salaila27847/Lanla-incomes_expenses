@@ -16,15 +16,20 @@ const PYTHON_BACKEND_URL = env("PYTHON_BACKEND_URL", "http://localhost:8000");
 interface OcrItem {
   id: string;
   raw_text: string;
-  /** Per unit; the backend already divided the line total by quantity. */
+  /** Per unit, before discount; the backend already divided by quantity. */
   price: number;
   quantity: number;
+  /** Taken off this line as a whole. */
+  discount: number;
 }
 
 interface OcrResponse {
   store: string | null;
   purchased_at: string | null;
   items: OcrItem[];
+  /** An amount off the whole receipt that no single line accounts for.
+   *  Becomes its own line for the user to categorise. */
+  bill_discount: number;
 }
 
 interface MatchCandidate {
@@ -135,6 +140,7 @@ receiptRouter.post("/scan", upload.single("image"), async (req, res) => {
     store: ocrResult.store,
     purchased_at: ocrResult.purchased_at,
     items,
+    bill_discount: ocrResult.bill_discount ?? 0,
     master_items: masterItems,
   });
 });
@@ -148,6 +154,7 @@ interface ConfirmedItem {
   raw_text: string;
   price: number;
   quantity?: number;
+  discount?: number;
   master_item_name: string;
   category: ItemCategory;
 }
@@ -193,6 +200,7 @@ receiptRouter.post("/confirm", async (req, res) => {
       category: item.category,
       price: item.price,
       quantity: item.quantity ?? 1,
+      discount: item.discount ?? 0,
     });
   }
 

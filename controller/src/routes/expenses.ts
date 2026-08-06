@@ -29,6 +29,7 @@ interface ExpenseBody {
   category?: unknown;
   price?: unknown;
   quantity?: unknown;
+  discount?: unknown;
 }
 
 type Parsed = { ok: true; value: Partial<PriceHistoryInput> } | { ok: false; error: string };
@@ -78,6 +79,18 @@ function parseExpense(body: ExpenseBody, partial: boolean): Parsed {
     value.quantity = quantity;
   } else if (!partial) {
     value.quantity = 1;
+  }
+
+  // Not capped at the line total: a bill-level discount is stored as a row
+  // whose price is 0, so its discount is legitimately larger than its line.
+  if (body.discount !== undefined) {
+    const discount = Number(body.discount);
+    if (!Number.isFinite(discount) || discount < 0) {
+      return { ok: false, error: "discount must be a number of 0 or more" };
+    }
+    value.discount = discount;
+  } else if (!partial) {
+    value.discount = 0;
   }
 
   if (body.store !== undefined) {

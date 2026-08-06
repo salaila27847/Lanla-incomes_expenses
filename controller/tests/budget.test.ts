@@ -429,3 +429,65 @@ describe("POST /budget/must-pay/:id/mark-unpaid", () => {
     expect((await request(app).post(`/budget/must-pay/nope/${action}`)).status).toBe(404);
   });
 });
+
+describe("discounts", () => {
+  it("counts what was paid, not the printed price", async () => {
+    const { app, sheets } = await buildApp();
+    await sheets.appendPriceHistoryRow({
+      date: TODAY,
+      store: "Lotus's",
+      masterItemName: "นมสด",
+      category: "food",
+      price: 15,
+      quantity: 3,
+      discount: 5,
+    });
+
+    const { body } = await request(app).get("/budget");
+
+    expect(body.spentThisCycle.food).toBe(40); // 15 x 3 - 5
+  });
+
+  it("lets a bill-level discount pull the cycle total down", async () => {
+    // Stored as its own row: price 0, discount 50. No negative price is
+    // ever needed, and no product's unit price is disturbed.
+    const { app, sheets } = await buildApp();
+    await sheets.appendPriceHistoryRow({
+      date: TODAY,
+      store: "Lotus's",
+      masterItemName: "ข้าวสาร",
+      category: "food",
+      price: 500,
+      quantity: 1,
+    });
+    await sheets.appendPriceHistoryRow({
+      date: TODAY,
+      store: "Lotus's",
+      masterItemName: "ส่วนลดท้ายบิล",
+      category: "food",
+      price: 0,
+      quantity: 1,
+      discount: 50,
+    });
+
+    const { body } = await request(app).get("/budget");
+
+    expect(body.spentThisCycle.food).toBe(450);
+  });
+
+  it("treats a row with no discount as full price", async () => {
+    // Every row written before the column existed.
+    const { app, sheets } = await buildApp();
+    await sheets.appendPriceHistoryRow({
+      date: TODAY,
+      store: null,
+      masterItemName: "ขนมปัง",
+      category: "food",
+      price: 29,
+    });
+
+    const { body } = await request(app).get("/budget");
+
+    expect(body.spentThisCycle.food).toBe(29);
+  });
+});

@@ -176,3 +176,64 @@ describe("unit price vs line total", () => {
     expect(body.groups[0].entries[0]).toMatchObject({ price: 15, quantity: 3 });
   });
 });
+
+describe("discounts", () => {
+  it("keeps the printed price as the headline and reports the net beside it", async () => {
+    // A promo you can't count on next time shouldn't become what the
+    // product "costs" — but what was actually paid is still worth seeing.
+    const { app, sheets } = await buildApp();
+    await sheets.appendPriceHistoryRow({
+      date: "2026-08-04",
+      store: "Lotus's",
+      masterItemName: "นมสด UHT 250ml",
+      category: "food",
+      price: 15,
+      quantity: 3,
+      discount: 6,
+    });
+
+    const { body } = await request(app).get("/prices?item=นมสด");
+
+    expect(body.groups[0].entries[0]).toMatchObject({
+      price: 15,
+      discount: 6,
+      netPrice: 13, // 15 - 6/3
+    });
+  });
+
+  it("hides a bill-level discount row", async () => {
+    // It's a row but not a price; "ส่วนลดท้ายบิล" is not something you
+    // compare across stores.
+    const { app, sheets } = await buildApp();
+    await sheets.appendPriceHistoryRow({
+      date: "2026-08-04",
+      store: "Lotus's",
+      masterItemName: "ส่วนลดท้ายบิล",
+      category: "food",
+      price: 0,
+      quantity: 1,
+      discount: 50,
+    });
+
+    const { body } = await request(app).get("/prices?item=ส่วนลด");
+
+    expect(body.groups).toEqual([]);
+  });
+
+  it("still shows a genuinely free item", async () => {
+    // Price 0 with no discount is a giveaway, and a real data point.
+    const { app, sheets } = await buildApp();
+    await sheets.appendPriceHistoryRow({
+      date: "2026-08-04",
+      store: "Lotus's",
+      masterItemName: "ของแถม",
+      category: "goods",
+      price: 0,
+      quantity: 1,
+    });
+
+    const { body } = await request(app).get("/prices?item=ของแถม");
+
+    expect(body.groups[0].entries[0]).toMatchObject({ price: 0, netPrice: 0 });
+  });
+});

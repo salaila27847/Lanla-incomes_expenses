@@ -173,19 +173,21 @@ export default function Budget() {
     }
   }
 
-  async function handleMarkPaid(id: string) {
+  async function handleSetPaid(id: string, paid: boolean) {
     setErrorMessage(null);
+    const status = paid ? "paid" : "unpaid";
     try {
-      const response = await fetch(`${API_BASE_URL}/budget/must-pay/${id}/mark-paid`, {
-        method: "POST",
-      });
+      const response = await fetch(
+        `${API_BASE_URL}/budget/must-pay/${encodeURIComponent(id)}/mark-${status}`,
+        { method: "POST" },
+      );
       if (!response.ok) throw new Error(`บันทึกสถานะไม่สำเร็จ (${response.status})`);
       setBudget((prev) =>
         prev
           ? {
               ...prev,
               mustPay: prev.mustPay.map((item) =>
-                item.id === id ? { ...item, status: "paid" as const } : item,
+                item.id === id ? { ...item, status } : item,
               ),
             }
           : prev,
@@ -257,17 +259,19 @@ export default function Budget() {
                   <span className="shrink-0 tabular-nums">
                     {item.amount.toLocaleString()} บาท
                   </span>
-                  {item.status === "paid" ? (
-                    <span className="shrink-0">🟢 จ่ายแล้ว</span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => handleMarkPaid(item.id)}
-                      className="shrink-0 rounded-full bg-slate-800 px-3 py-1.5"
-                    >
-                      จ่ายแล้ว
-                    </button>
-                  )}
+                  {/* Tapping it again undoes it — the button sits in a
+                      crowded row and a mistap used to be unrecoverable
+                      without deleting the bill and retyping it. */}
+                  <button
+                    type="button"
+                    onClick={() => handleSetPaid(item.id, item.status !== "paid")}
+                    title={item.status === "paid" ? "แตะเพื่อยกเลิก" : undefined}
+                    className={`shrink-0 rounded-full px-3 py-1.5 ${
+                      item.status === "paid" ? "bg-emerald-900/60" : "bg-slate-800"
+                    }`}
+                  >
+                    {item.status === "paid" ? "🟢 จ่ายแล้ว" : "จ่ายแล้ว"}
+                  </button>
                   {/* Two taps to delete: the list is typed in by hand, so a
                       stray tap on a crowded row shouldn't lose a bill. */}
                   <button

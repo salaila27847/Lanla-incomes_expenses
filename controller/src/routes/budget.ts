@@ -78,10 +78,21 @@ budgetRouter.post("/must-pay", async (req, res) => {
   res.status(201).json(await appendMustPayItem({ name, amount, month: cycle.key }));
 });
 
-budgetRouter.post("/must-pay/:id/mark-paid", async (req, res) => {
-  await updateMustPayStatus(req.params.id, "paid");
-  res.json({ success: true, id: req.params.id, status: "paid" });
-});
+// Marking a bill paid is a one-tap action sitting in a crowded row, so
+// getting it wrong is easy — and without the reverse the only way back was
+// to delete the bill and retype it.
+for (const [path, status] of [
+  ["mark-paid", "paid"],
+  ["mark-unpaid", "unpaid"],
+] as const) {
+  budgetRouter.post(`/must-pay/:id/${path}`, async (req, res) => {
+    if (!(await updateMustPayStatus(req.params.id, status))) {
+      res.status(404).json({ error: "must-pay item not found" });
+      return;
+    }
+    res.json({ success: true, id: req.params.id, status });
+  });
+}
 
 // A bill added twice, or under the wrong name, was otherwise stuck on the
 // checklist for good — the list is added to by hand, so it collects typos.

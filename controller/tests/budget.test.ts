@@ -356,3 +356,76 @@ describe("DELETE /budget/must-pay/:id", () => {
     expect(body.mustPay).toEqual([]);
   });
 });
+
+describe("POST /budget/must-pay/:id/mark-unpaid", () => {
+  it("puts a paid item back to unpaid", async () => {
+    // Marking paid is one tap in a crowded row; without the reverse the
+    // only way back was to delete the bill and retype it.
+    const { app, sheets } = await buildApp();
+    const item = await sheets.appendMustPayItem({
+      name: "ค่าไฟ",
+      amount: 1180,
+      month: THIS_CYCLE,
+    });
+    await sheets.updateMustPayStatus(item.id, "paid");
+
+    const response = await request(app).post(`/budget/must-pay/${item.id}/mark-unpaid`);
+
+    expect(response.status).toBe(200);
+    expect((await sheets.readMustPayItems())[0].status).toBe("unpaid");
+  });
+
+  it("clears the paid timestamp", async () => {
+    // A paidAt left on an unpaid row is a contradiction the sheet would
+    // carry indefinitely.
+    const { app, sheets } = await buildApp();
+    const item = await sheets.appendMustPayItem({
+      name: "ค่าไฟ",
+      amount: 1180,
+      month: THIS_CYCLE,
+    });
+    await sheets.updateMustPayStatus(item.id, "paid");
+    expect((await sheets.readMustPayItems())[0].paidAt).not.toBeNull();
+
+    await request(app).post(`/budget/must-pay/${item.id}/mark-unpaid`);
+
+    expect((await sheets.readMustPayItems())[0].paidAt).toBeNull();
+  });
+
+  it("affects only the targeted item", async () => {
+    const { app, sheets } = await buildApp();
+    const first = await sheets.appendMustPayItem({ name: "ค่าไฟ", amount: 1, month: THIS_CYCLE });
+    const second = await sheets.appendMustPayItem({ name: "ค่าน้ำ", amount: 2, month: THIS_CYCLE });
+    await sheets.updateMustPayStatus(first.id, "paid");
+    await sheets.updateMustPayStatus(second.id, "paid");
+
+    await request(app).post(`/budget/must-pay/${first.id}/mark-unpaid`);
+
+    const items = await sheets.readMustPayItems();
+    expect(items.find((i) => i.id === first.id)!.status).toBe("unpaid");
+    expect(items.find((i) => i.id === second.id)!.status).toBe("paid");
+  });
+
+  it("survives a round trip both ways", async () => {
+    const { app, sheets } = await buildApp();
+    const item = await sheets.appendMustPayItem({
+      name: "ค่าไฟ",
+      amount: 1180,
+      month: THIS_CYCLE,
+    });
+
+    await request(app).post(`/budget/must-pay/${item.id}/mark-paid`);
+    await request(app).post(`/budget/must-pay/${item.id}/mark-unpaid`);
+    await request(app).post(`/budget/must-pay/${item.id}/mark-paid`);
+
+    const [stored] = await sheets.readMustPayItems();
+    expect(stored.status).toBe("paid");
+    expect(stored.paidAt).not.toBeNull();
+  });
+
+  it.each(["mark-paid", "mark-unpaid"])("404s for an unknown id (%s)", async (action) => {
+    const { app } = await buildApp();
+
+    expect((await request(app).post(`/budget/must-pay/nope/${action}`)).status).toBe(404);
+  });
+});

@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 
 interface PriceEntry {
   masterItemName: string;
+  /** Per unit — what makes one store comparable to another. */
   price: number;
+  quantity: number;
   date: string;
 }
 
@@ -94,9 +96,17 @@ export default function PriceHistory() {
                     key={`${entry.date}-${index}`}
                     className="flex items-center justify-between rounded-lg border border-slate-800 px-3 py-2 text-sm"
                   >
-                    <span>{entry.masterItemName}</span>
-                    <span>{entry.price.toFixed(2)}</span>
-                    <span className="text-slate-500">{entry.date}</span>
+                    <span className="min-w-0 flex-1 truncate">{entry.masterItemName}</span>
+                    <span className="shrink-0 tabular-nums">
+                      {entry.price.toFixed(2)}
+                      {/* Per unit, so a 3-pack is comparable to a single
+                          bought elsewhere. The count is context, not price. */}
+                      <span className="text-xs text-slate-500">/ชิ้น</span>
+                      {entry.quantity > 1 && (
+                        <span className="ml-1 text-xs text-slate-500">(ซื้อ {entry.quantity})</span>
+                      )}
+                    </span>
+                    <span className="ml-2 shrink-0 text-slate-500">{entry.date}</span>
                   </li>
                 ))}
               </ul>

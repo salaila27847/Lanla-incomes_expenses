@@ -1,43 +1,68 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import MasterItemPicker, {
+  type MasterItem,
+  type MatchCandidate,
+} from "../components/MasterItemPicker";
 
 type ReceiptCategory = "food" | "goods";
 
 interface ReceiptLineItem {
   id: string;
   rawText: string;
+  /** Per unit. What the line cost is price × quantity. */
   price: number;
+  quantity: number;
   category: ReceiptCategory;
   masterItemName: string;
-  matched: boolean;
+  candidates: MatchCandidate[];
+  /** Whether the matcher was confident enough to fill this in itself. */
+  autoMatched: boolean;
 }
 
 interface ScanResponseItem {
   id: string;
   raw_text: string;
   price: number;
+  quantity: number;
   matched: boolean;
   master_item_name: string | null;
   category: ReceiptCategory | null;
   score: number;
+  candidates: MatchCandidate[];
 }
 
 interface ScanResponse {
   store: string | null;
   purchased_at: string | null;
   items: ScanResponseItem[];
+  master_items: MasterItem[];
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3001";
 
 type Status = "idle" | "scanning" | "reviewing" | "saving" | "saved" | "error";
+type Mode = "scan" | "manual";
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 export default function ReceiptReview() {
+  const [mode, setMode] = useState<Mode>("scan");
   const [status, setStatus] = useState<Status>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [store, setStore] = useState<string | null>(null);
   const [purchasedAt, setPurchasedAt] = useState<string | null>(null);
   const [items, setItems] = useState<ReceiptLineItem[]>([]);
+  const [masterItems, setMasterItems] = useState<MasterItem[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/receipt/master-items`)
+      .then((response) => (response.ok ? response.json() : { master_items: [] }))
+      .then((body) => setMasterItems(body.master_items))
+      .catch(() => setMasterItems([]));
+  }, []);
 
   async function handleFileSelected(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -59,15 +84,18 @@ export default function ReceiptReview() {
       }
       const result: ScanResponse = await response.json();
       setStore(result.store);
-      setPurchasedAt(result.purchased_at);
+      setPurchasedAt(result.purchased_at ?? today());
+      if (result.master_items) setMasterItems(result.master_items);
       setItems(
         result.items.map((item) => ({
           id: item.id,
           rawText: item.raw_text,
           price: item.price,
+          quantity: item.quantity ?? 1,
           category: item.category ?? "food",
           masterItemName: item.master_item_name ?? "",
-          matched: item.matched,
+          candidates: item.candidates ?? [],
+          autoMatched: item.matched,
         })),
       );
       setStatus("reviewing");
@@ -77,21 +105,32 @@ export default function ReceiptReview() {
     }
   }
 
-  function toggleCategory(id: string) {
-    setItems((prev) =>
-      prev.map((item) =>
-        item.id === id
-          ? { ...item, category: item.category === "food" ? "goods" : "food" }
-          : item,
-      ),
-    );
+  function patchItem(id: string, patch: Partial<ReceiptLineItem>) {
+    setItems((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   }
 
-  function setMasterItemName(id: string, name: string) {
-    setItems((prev) => prev.map((item) => (item.id === id ? { ...item, masterItemName: name } : item)));
+  function addBlankLine() {
+    setItems((prev) => [
+      ...prev,
+      {
+        id: `manual-${Date.now()}-${prev.length}`,
+        rawText: "",
+        price: 0,
+        quantity: 1,
+        category: "food",
+        masterItemName: "",
+        candidates: [],
+        autoMatched: false,
+      },
+    ]);
+    if (!purchasedAt) setPurchasedAt(today());
+    setStatus("reviewing");
   }
 
-  const canSave = items.length > 0 && items.every((item) => item.masterItemName.trim().length > 0);
+  const canSave =
+    items.length > 0 &&
+    items.every((item) => item.masterItemName.trim().length > 0 && item.price >= 0);
+  const total = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
   async function handleSave() {
     setStatus("saving");
@@ -102,10 +141,11 @@ export default function ReceiptReview() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           store,
-          purchased_at: purchasedAt,
+          purchased_at: purchasedAt ?? today(),
           items: items.map((item) => ({
-            raw_text: item.rawText,
+            raw_text: item.rawText || item.masterItemName,
             price: item.price,
+            quantity: item.quantity,
             master_item_name: item.masterItemName.trim(),
             category: item.category,
           })),
@@ -114,6 +154,8 @@ export default function ReceiptReview() {
       if (!response.ok) {
         throw new Error(`บันทึกไม่สำเร็จ (${response.status})`);
       }
+      setItems([]);
+      setStore(null);
       setStatus("saved");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ");
@@ -124,77 +166,201 @@ export default function ReceiptReview() {
   return (
     <section className="space-y-4">
       <div>
-        <h2 className="text-base font-medium">สแกนสลิป</h2>
+        <h2 className="text-base font-medium">เพิ่มรายจ่าย</h2>
         <p className="text-sm text-slate-400">
-          ถ่ายรูปสลิปเพื่อแยกรายการ [🍔 กิน] / [🧴 ใช้] และจับคู่ชื่อสินค้ามาตรฐาน
+          สแกนสลิปแล้วตรวจทาน หรือกรอกเองทีละรายการ
         </p>
       </div>
 
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={handleFileSelected}
-      />
-      <button
-        type="button"
-        onClick={() => fileInputRef.current?.click()}
-        disabled={status === "scanning" || status === "saving"}
-        className="w-full rounded-lg border border-dashed border-slate-700 py-6 text-sm text-slate-400 disabled:opacity-50"
-      >
-        {status === "scanning" ? "กำลังสแกน..." : "แตะเพื่อถ่าย/เลือกรูปสลิป"}
-      </button>
+      <div className="flex gap-2">
+        {(
+          [
+            ["scan", "📷 สแกนสลิป"],
+            ["manual", "✏️ กรอกเอง"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setMode(value)}
+            className={`flex-1 rounded-lg py-2 text-sm ${
+              mode === value ? "bg-sky-600" : "bg-slate-800 text-slate-300"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
-      {status === "error" && errorMessage && (
-        <p className="text-sm text-red-400">{errorMessage}</p>
+      {mode === "scan" ? (
+        <>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleFileSelected}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={status === "scanning" || status === "saving"}
+            className="w-full rounded-lg border border-dashed border-slate-700 py-6 text-sm text-slate-400 disabled:opacity-50"
+          >
+            {status === "scanning" ? "กำลังสแกน..." : "แตะเพื่อถ่าย/เลือกรูปสลิป"}
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          onClick={addBlankLine}
+          className="w-full rounded-lg border border-dashed border-slate-700 py-6 text-sm text-slate-400"
+        >
+          ＋ เพิ่มรายการ
+        </button>
       )}
+
+      {status === "error" && errorMessage && <p className="text-sm text-red-400">{errorMessage}</p>}
       {status === "saved" && <p className="text-sm text-emerald-400">บันทึกสำเร็จ</p>}
 
       {items.length === 0 ? (
-        <p className="text-sm text-slate-500">ยังไม่มีรายการให้ตรวจสอบ</p>
+        <p className="text-sm text-slate-500">ยังไม่มีรายการ</p>
       ) : (
         <>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-xs text-slate-500">
+              ร้าน
+              <input
+                value={store ?? ""}
+                onChange={(event) => setStore(event.target.value || null)}
+                placeholder="เช่น Lotus's"
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+              />
+            </label>
+            <label className="text-xs text-slate-500">
+              วันที่
+              <input
+                type="date"
+                value={purchasedAt ?? today()}
+                onChange={(event) => setPurchasedAt(event.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+              />
+            </label>
+          </div>
+
           <ul className="divide-y divide-slate-800">
             {items.map((item) => (
               <li key={item.id} className="space-y-2 py-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs text-slate-500">{item.rawText}</p>
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm">{item.price.toFixed(2)}</span>
+                <div className="flex items-start justify-between gap-2">
+                  <p className="min-w-0 flex-1 truncate text-xs text-slate-500">
+                    {item.rawText || "รายการที่กรอกเอง"}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setItems((prev) => prev.filter((i) => i.id !== item.id))}
+                    className="shrink-0 px-2 text-xs text-slate-500"
+                    aria-label="ลบรายการนี้"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <MasterItemPicker
+                  value={item.masterItemName}
+                  masterItems={masterItems}
+                  candidates={item.candidates}
+                  suggestedNewName={item.rawText}
+                  onChange={(name, category) =>
+                    patchItem(item.id, {
+                      masterItemName: name,
+                      ...(category ? { category } : {}),
+                    })
+                  }
+                />
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      patchItem(item.id, {
+                        category: item.category === "food" ? "goods" : "food",
+                      })
+                    }
+                    className="shrink-0 rounded-full bg-slate-800 px-3 py-2 text-sm"
+                  >
+                    {item.category === "food" ? "🍔 กิน" : "🧴 ใช้"}
+                  </button>
+
+                  <div className="flex shrink-0 items-center rounded-full bg-slate-800">
                     <button
                       type="button"
-                      onClick={() => toggleCategory(item.id)}
-                      className="rounded-full bg-slate-800 px-3 py-1 text-sm"
+                      onClick={() =>
+                        patchItem(item.id, { quantity: Math.max(1, item.quantity - 1) })
+                      }
+                      className="px-3 py-2 text-sm"
+                      aria-label="ลดจำนวน"
                     >
-                      {item.category === "food" ? "🍔 กิน" : "🧴 ใช้"}
+                      −
+                    </button>
+                    <span className="min-w-6 text-center text-sm tabular-nums">
+                      {item.quantity}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => patchItem(item.id, { quantity: item.quantity + 1 })}
+                      className="px-3 py-2 text-sm"
+                      aria-label="เพิ่มจำนวน"
+                    >
+                      ＋
                     </button>
                   </div>
-                </div>
-                {item.matched ? (
-                  // TODO: turn this into a search-dropdown autocomplete so the
-                  // user can also re-pick a different master item in 1 tap.
-                  <p className="text-sm">{item.masterItemName}</p>
-                ) : (
+
                   <input
-                    value={item.masterItemName}
-                    onChange={(event) => setMasterItemName(item.id, event.target.value)}
-                    placeholder="ตั้งชื่อสินค้ามาตรฐาน (ไม่พบในระบบ)"
-                    className="w-full rounded-lg border border-amber-700 bg-slate-900 px-3 py-2 text-sm"
+                    value={item.price}
+                    onChange={(event) =>
+                      patchItem(item.id, { price: Number(event.target.value) || 0 })
+                    }
+                    inputMode="decimal"
+                    aria-label="ราคาต่อชิ้น"
+                    className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-right text-sm"
                   />
-                )}
+                </div>
+
+                <p className="text-right text-xs text-slate-500">
+                  {item.quantity > 1
+                    ? `${item.quantity} × ${item.price.toFixed(2)} = ${(item.price * item.quantity).toFixed(2)} บาท`
+                    : `${item.price.toFixed(2)} บาท`}
+                </p>
               </li>
             ))}
           </ul>
+
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-slate-400">รวม</span>
+            <span className="tabular-nums">{total.toFixed(2)} บาท</span>
+          </div>
+
+          <button
+            type="button"
+            onClick={addBlankLine}
+            className="w-full rounded-lg border border-slate-800 py-2 text-sm text-slate-400"
+          >
+            ＋ เพิ่มรายการที่สลิปอ่านไม่เจอ
+          </button>
 
           <button
             type="button"
             onClick={handleSave}
             disabled={!canSave || status === "saving"}
-            className="w-full rounded-lg bg-sky-600 py-2 text-sm font-medium disabled:opacity-50"
+            className="w-full rounded-lg bg-sky-600 py-3 text-sm font-medium disabled:opacity-50"
           >
             {status === "saving" ? "กำลังบันทึก..." : "บันทึก"}
           </button>
+          {!canSave && (
+            <p className="text-center text-xs text-amber-400">
+              เลือกสินค้าให้ครบทุกรายการก่อนบันทึก
+            </p>
+          )}
         </>
       )}
     </section>

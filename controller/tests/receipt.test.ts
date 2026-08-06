@@ -186,7 +186,7 @@ describe("POST /receipt/confirm", () => {
       new_master_items_added: 1,
       price_history_rows_written: 1,
     });
-    expect(await sheets.readPriceHistory()).toEqual([
+    expect(await sheets.readPriceHistory()).toMatchObject([
       {
         date: "2026-08-04",
         store: "7-Eleven",
@@ -254,7 +254,7 @@ describe("POST /receipt/confirm", () => {
         .send({ ...confirmBody, items: [] });
 
       expect(response.status).toBe(400);
-      expect(await sheets.readPriceHistory()).toEqual([]);
+      expect(await sheets.readPriceHistory()).toMatchObject([]);
     });
 
     it("an item with no master item name", async () => {
@@ -285,7 +285,61 @@ describe("POST /receipt/confirm", () => {
         });
 
       expect(response.status).toBe(400);
-      expect(await sheets.readPriceHistory()).toEqual([]);
+      expect(await sheets.readPriceHistory()).toMatchObject([]);
+    });
+  });
+});
+
+describe("backend reachability", () => {
+  it("reports an unreachable OCR backend instead of crashing", async () => {
+    // fetch rejects rather than resolving when nothing is listening. Left
+    // unhandled that killed the whole controller process in local dev.
+    const { app } = await buildApp();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    );
+
+    const response = await request(app)
+      .post("/receipt/scan")
+      .attach("image", Buffer.from("fake"), "receipt.jpg");
+
+    expect(response.status).toBe(502);
+    expect(response.body.error).toContain("unreachable");
+  });
+
+  it("falls back to an unmatched line when only matching is unreachable", async () => {
+    // The line still has its text and price, and picking by hand is now a
+    // normal path — losing the whole scan over it would be a bad trade.
+    const { app } = await buildApp();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: any) => {
+        if (String(url).includes("/match/")) throw new TypeError("fetch failed");
+        return new Response(
+          JSON.stringify({
+            store: "Lotus",
+            purchased_at: "2026-08-04",
+            items: [{ id: "1", raw_text: "นมสด", price: 15, quantity: 2 }],
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }),
+    );
+
+    const response = await request(app)
+      .post("/receipt/scan")
+      .attach("image", Buffer.from("fake"), "receipt.jpg");
+
+    expect(response.status).toBe(200);
+    expect(response.body.items[0]).toMatchObject({
+      raw_text: "นมสด",
+      price: 15,
+      quantity: 2,
+      matched: false,
+      candidates: [],
     });
   });
 });

@@ -113,12 +113,22 @@ export interface MasterItem {
 }
 
 export interface PriceHistoryRow {
+  /** A UUID for rows written since the ID column existed. Rows older than
+   *  it get a synthetic `row:<n>` handle so they stay editable too. */
+  id: string;
   date: string;
   store: string | null;
   masterItemName: string;
-  category: ItemCategory;
+  /** Per unit. Multiply by `quantity` for what the line cost — see the
+   *  Price/Quantity note in SETUP.md. */
   price: number;
+  quantity: number;
+  category: ItemCategory;
 }
+
+export type PriceHistoryInput = Omit<PriceHistoryRow, "id" | "quantity"> & {
+  quantity?: number;
+};
 
 export type MustPayStatus = "unpaid" | "paid";
 
@@ -178,34 +188,109 @@ export async function appendMasterItem(name: string, category: ItemCategory): Pr
   await appendRow("MasterItems!A:C", [name, category, new Date().toISOString()]);
 }
 
-export async function appendPriceHistoryRow(row: PriceHistoryRow): Promise<void> {
-  if (MOCK_MODE) {
-    mockPriceHistory.push(row);
-    return;
-  }
-  await appendRow("PriceHistory!A:E", [
+function priceHistoryValues(row: PriceHistoryRow): unknown[] {
+  return [
     row.date,
     row.store ?? "",
     row.masterItemName,
     row.category,
     row.price,
-  ]);
+    row.quantity,
+    row.id,
+  ];
+}
+
+export async function appendPriceHistoryRow(input: PriceHistoryInput): Promise<PriceHistoryRow> {
+  const row: PriceHistoryRow = { ...input, id: randomUUID(), quantity: input.quantity ?? 1 };
+  if (MOCK_MODE) {
+    mockPriceHistory.push(row);
+    return row;
+  }
+  await appendRow("PriceHistory!A:G", priceHistoryValues(row));
+  return row;
 }
 
 export async function readPriceHistory(): Promise<PriceHistoryRow[]> {
   if (MOCK_MODE) {
     return mockPriceHistory;
   }
-  const rows = await readRange("PriceHistory!A2:E");
+  const rows = await readRange("PriceHistory!A2:G");
   return rows
-    .filter((row) => row[0])
-    .map((row) => ({
+    .map((row, index) => ({ row, rowNumber: index + 2 }))
+    .filter(({ row }) => row[0])
+    .map(({ row, rowNumber }) => ({
+      // Rows written before the ID column existed have nothing in G, and
+      // they're the ones most likely to need correcting. Their row number
+      // stands in — safe because deletes blank a row rather than removing
+      // it, so no other row's number ever shifts.
+      id: row[6] ? String(row[6]) : `row:${rowNumber}`,
       date: String(row[0]),
       store: row[1] ? String(row[1]) : null,
       masterItemName: String(row[2]),
       category: row[3] === "goods" ? "goods" : "food",
       price: toNumber(row[4]),
+      // Blank means one, matching every row written before the column
+      // existed. Zero would erase the line from every total.
+      quantity: toOptionalNumber(row[5]) ?? 1,
     }));
+}
+
+/** Row number for either ID form, or null if it's gone. */
+async function priceHistoryRowNumber(id: string): Promise<number | null> {
+  if (id.startsWith("row:")) {
+    const rowNumber = Number(id.slice(4));
+    return Number.isInteger(rowNumber) && rowNumber >= 2 ? rowNumber : null;
+  }
+  return findRowNumber("PriceHistory!G2:G", id);
+}
+
+export async function updatePriceHistoryRow(
+  id: string,
+  updates: Partial<PriceHistoryInput>,
+): Promise<PriceHistoryRow | null> {
+  const existing = (await readPriceHistory()).find((row) => row.id === id);
+  if (!existing) return null;
+
+  const merged: PriceHistoryRow = {
+    ...existing,
+    ...Object.fromEntries(Object.entries(updates).filter(([, value]) => value !== undefined)),
+  };
+
+  if (MOCK_MODE) {
+    const index = mockPriceHistory.findIndex((row) => row.id === id);
+    if (index !== -1) mockPriceHistory[index] = merged;
+    return merged;
+  }
+
+  const rowNumber = await priceHistoryRowNumber(id);
+  if (rowNumber === null) return null;
+  // A pre-ID row keeps its row: handle rather than gaining a UUID, so the
+  // handle the caller is holding stays valid.
+  await updateRange(`PriceHistory!A${rowNumber}:G${rowNumber}`, [
+    ...priceHistoryValues(merged).slice(0, 6),
+    id.startsWith("row:") ? "" : id,
+  ]);
+  return merged;
+}
+
+export async function deletePriceHistoryRow(id: string): Promise<boolean> {
+  if (MOCK_MODE) {
+    const index = mockPriceHistory.findIndex((row) => row.id === id);
+    if (index === -1) return false;
+    mockPriceHistory.splice(index, 1);
+    return true;
+  }
+
+  // Checked against the rows that actually exist, not just parsed: a stale
+  // `row:99` handle is well-formed but points at nothing, and blanking an
+  // empty row would report a deletion that never happened.
+  if (!(await readPriceHistory()).some((row) => row.id === id)) return false;
+
+  const rowNumber = await priceHistoryRowNumber(id);
+  if (rowNumber === null) return false;
+  // Blanked, not removed — see the note on `row:<n>` above, and deleteIncome.
+  await updateRange(`PriceHistory!A${rowNumber}:G${rowNumber}`, ["", "", "", "", "", "", ""]);
+  return true;
 }
 
 export async function readMustPayItems(): Promise<MustPayItem[]> {

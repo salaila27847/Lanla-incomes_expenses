@@ -19,7 +19,26 @@ Monorepo with three independently deployable services, no shared build tooling b
 **Current state:** all four spec features work end-to-end:
 - `/backend`'s OCR (`app/routers/ocr.py`) and fuzzy matching (`app/routers/match.py`) are real — matching via `rapidfuzz`. OCR is two Typhoon calls, not one: `typhoon-ocr` is only served through a dedicated `POST {base}/ocr` multipart endpoint (not `/chat/completions`, and it takes no custom prompt — it just returns the document's raw OCR text), so a second call to a regular chat model (`TYPHOON_TEXT_MODEL`, default `typhoon-v2.5-30b-a3b-instruct`) turns that raw text into our `{store, purchased_at, items}` schema. Model IDs vary per account and can't be verified from the docs — on a "Model not found" the logs print every model the key can actually reach. OCR defaults to `OCR_MOCK_MODE=true` (returns a canned fixture from `app/fixtures/sample_receipt.py`) since no `TYPHOON_API_KEY` or real receipt photos exist yet. `/backend`'s `/qr` builds a PromptPay EMVCo payload (`app/promptpay.py`, verified against the reference implementation's own test vectors) and renders it with `qrcode` — no mock mode, since it's pure computation with no external service, but it needs `SAVINGS_PROMPTPAY_ID` set in `.env` (the savings account's PromptPay ID) or it 400s.
 - `/controller`'s Sheets client (`src/sheets/client.ts`) covers all six tabs (`MasterItems`, `PriceHistory`, `MustPay`, `Cycles`, `Income`, `Settings`); its `/receipt/scan`, `/receipt/confirm`, `/budget`, `/prices`, `/dashboard`, `/income`, and `/qr` (a thin proxy to the backend) routes are real. Defaults to `SHEETS_MOCK_MODE=true` (in-memory lists stand in for the sheet tabs) since no Google Sheet or service account exists yet — see `SETUP.md` for that one-time manual setup.
-- `/frontend`'s `ReceiptReview` page scans, reviews/re-categorizes, names unmatched items, and saves. `Budget` shows the current pay cycle's spend against the food/goods caps (computed from `PriceHistory`) and a must-pay checklist (add via a name+amount form with autocomplete over previously-used names, mark paid with a tap — manual, not tied to receipt scanning). `Dashboard` is the annual view: twelve pay-cycle columns, rows for income by source / bills by name / food+goods from receipts, and summary rows for totals, net, and both account balances. It also owns the payday calendar and the budget settings. `PriceHistory` searches master item names (substring match) and shows results grouped by store, newest first. `SavingsQR` posts an amount and renders the returned QR image.
+- `/frontend`'s `ReceiptReview` page (route `/scan`) has two modes — scan a receipt or type lines in by hand — and either way each line is reviewed with a quantity stepper, a unit price, and a master-item picker before saving. `Budget` shows the current pay cycle's spend against the food/goods caps (computed from `PriceHistory`) and a must-pay checklist (add via a name+amount form with autocomplete over previously-used names, mark paid with a tap — manual, not tied to receipt scanning). `Dashboard` is the annual view: twelve pay-cycle columns, rows for income by source / bills by name / food+goods from receipts, and summary rows for totals, net, and both account balances. It also owns the payday calendar and the budget settings. `PriceHistory` searches master item names (substring match) and shows results grouped by store, newest first. `SavingsQR` posts an amount and renders the returned QR image.
+
+## Unit price vs line total
+
+`PriceHistory.Price` is **per unit**; `Quantity` multiplies it. Which one to use is not a style choice:
+
+- **Anything summing money uses `price * quantity`** — `budget.ts` and `dashboard.ts`. These are the only two places, and both carry a comment saying so.
+- **Price comparison uses `price` alone** — `prices.ts`. A 3-pack's total isn't comparable to a single unit bought elsewhere, and comparing them is what would make the price history useless.
+
+OCR is asked for `quantity` and `line_total` (both printed on the receipt) and `_normalise_items` in `ocr.py` does the division. Asking the model for a per-unit price instead puts arithmetic in the least reliable part of the pipeline, and a plausible wrong price is invisible — it just becomes that product's recorded price.
+
+A blank `Quantity` reads as 1, so rows written before the column existed still total correctly.
+
+## Master item matching
+
+`/match` returns a ranked `candidates` list and two thresholds gate it: `MATCH_CONFIDENCE_THRESHOLD` (60) is the floor for suggesting anything, `MATCH_AUTO_APPLY_THRESHOLD` (90) is where the top candidate gets pre-selected. In between, candidates are shown but nothing is chosen.
+
+The gap exists because receipts frequently don't print the brand. Measured `fuzz.WRatio` scores: `นมสด250ml` scores **64 against both** `นมสด โฟร์โมสต์ 250ml` and `นมสด ดัชมิลล์ 250ml` — identically, because the deciding information isn't in the text. No scorer breaks that tie. Meanwhile pure spacing noise (`นมสดUHT250ml` vs `นมสด UHT 250ml`) scores 92 and shouldn't cost a tap. Tuning the threshold cannot fix the first case; only the picker can.
+
+Every line gets a picker, including auto-matched ones. An earlier version printed a confident match as unchangeable text, which is how two brands quietly shared one price history.
 
 ## Pay cycles
 

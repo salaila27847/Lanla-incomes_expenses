@@ -16,7 +16,9 @@ const PYTHON_BACKEND_URL = env("PYTHON_BACKEND_URL", "http://localhost:8000");
 interface OcrItem {
   id: string;
   raw_text: string;
+  /** Per unit; the backend already divided the line total by quantity. */
   price: number;
+  quantity: number;
 }
 
 interface OcrResponse {
@@ -25,17 +27,26 @@ interface OcrResponse {
   items: OcrItem[];
 }
 
+interface MatchCandidate {
+  name: string;
+  score: number;
+}
+
 interface MatchResponse {
   matched: boolean;
   master_item_name: string | null;
   score: number;
+  candidates: MatchCandidate[];
 }
 
 interface ScanResponseItem extends OcrItem {
+  /** True only when the top candidate scored high enough to pre-select.
+   *  Otherwise the frontend shows `candidates` and waits for a tap. */
   matched: boolean;
   master_item_name: string | null;
   category: ItemCategory | null;
   score: number;
+  candidates: MatchCandidate[];
 }
 
 // Scan: OCR the receipt, then fuzzy-match every line against the current
@@ -56,10 +67,21 @@ receiptRouter.post("/scan", upload.single("image"), async (req, res) => {
     req.file.originalname,
   );
 
-  const ocrResponse = await fetch(`${PYTHON_BACKEND_URL}/ocr/`, {
-    method: "POST",
-    body: ocrForm,
-  });
+  // fetch rejects rather than resolving when the backend isn't reachable
+  // at all, and an unhandled rejection here took the whole controller down
+  // in local dev. Naming the URL matters too: "502" alone sent us round a
+  // long debugging loop once already.
+  let ocrResponse: Response;
+  try {
+    ocrResponse = await fetch(`${PYTHON_BACKEND_URL}/ocr/`, { method: "POST", body: ocrForm });
+  } catch (error) {
+    res.status(502).json({
+      error: `OCR backend unreachable at ${PYTHON_BACKEND_URL}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    });
+    return;
+  }
   if (!ocrResponse.ok) {
     res.status(502).json({ error: `OCR backend returned ${ocrResponse.status}` });
     return;
@@ -71,31 +93,61 @@ receiptRouter.post("/scan", upload.single("image"), async (req, res) => {
 
   const items: ScanResponseItem[] = await Promise.all(
     ocrResult.items.map(async (item): Promise<ScanResponseItem> => {
-      const matchResponse = await fetch(`${PYTHON_BACKEND_URL}/match/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          raw_text: item.raw_text,
-          candidate_master_items: candidateNames,
-        }),
-      });
+      // A matching failure is survivable in a way an OCR failure isn't:
+      // the line still has its text and price, and "pick it yourself" is
+      // now a first-class path rather than a dead end.
+      const unmatched: ScanResponseItem = {
+        ...item,
+        matched: false,
+        master_item_name: null,
+        category: null,
+        score: 0,
+        candidates: [],
+      };
+
+      let matchResponse: Response;
+      try {
+        matchResponse = await fetch(`${PYTHON_BACKEND_URL}/match/`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            raw_text: item.raw_text,
+            candidate_master_items: candidateNames,
+          }),
+        });
+      } catch {
+        return unmatched;
+      }
       if (!matchResponse.ok) {
-        return { ...item, matched: false, master_item_name: null, category: null, score: 0 };
+        return unmatched;
       }
       const match = (await matchResponse.json()) as MatchResponse;
       const category = match.matched
         ? (masterItems.find((mi) => mi.name === match.master_item_name)?.category ?? null)
         : null;
-      return { ...item, ...match, category };
+      return { ...item, ...match, candidates: match.candidates ?? [], category };
     }),
   );
 
-  res.json({ store: ocrResult.store, purchased_at: ocrResult.purchased_at, items });
+  // The full list rides along so the picker can offer every master item
+  // without a second round trip — they're already read above.
+  res.json({
+    store: ocrResult.store,
+    purchased_at: ocrResult.purchased_at,
+    items,
+    master_items: masterItems,
+  });
+});
+
+/** The master item list on its own, for the manual-entry form. */
+receiptRouter.get("/master-items", async (_req, res) => {
+  res.json({ master_items: await readMasterItems() });
 });
 
 interface ConfirmedItem {
   raw_text: string;
   price: number;
+  quantity?: number;
   master_item_name: string;
   category: ItemCategory;
 }
@@ -140,6 +192,7 @@ receiptRouter.post("/confirm", async (req, res) => {
       masterItemName: item.master_item_name,
       category: item.category,
       price: item.price,
+      quantity: item.quantity ?? 1,
     });
   }
 

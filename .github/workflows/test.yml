@@ -1,0 +1,74 @@
+# Runs the three test suites on every pull request, and on main after a
+# merge.
+#
+# Vercel's three checks already prove each service *builds*. They cannot
+# prove it behaves: `price * quantity + discount` type-checks, builds, and
+# deploys perfectly while adding every discount to the bill. That class of
+# bug is what the suites catch and what nothing was running them to find.
+#
+# No secrets are configured on purpose. Every suite runs offline — the
+# backend fakes Typhoon with httpx.MockTransport, the controller runs its
+# Sheets client in SHEETS_MOCK_MODE and stubs fetch — so CI needs neither
+# the Google service account nor TYPHOON_API_KEY to be useful. Nothing here
+# can leak a credential, because none is present.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Pushing again to a branch makes the in-flight run's answer obsolete
+# before it finishes; cancelling it keeps the checks pointed at the commit
+# actually under review.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: backend (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # The version the suite is developed against. Vercel picks its
+          # own for @vercel/python; if that drifts far enough to matter,
+          # this is the line to move so CI keeps testing what ships.
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: pytest
+
+  node:
+    # controller and frontend differ only in which directory they run in.
+    name: ${{ matrix.service }} (vitest)
+    runs-on: ubuntu-latest
+    strategy:
+      # Without this, the first service to fail cancels the other and hides
+      # half the answer — the opposite of what a failing build should tell.
+      fail-fast: false
+      matrix:
+        service: [controller, frontend]
+    defaults:
+      run:
+        working-directory: ${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.service }}/package-lock.json
+      # ci, not install: it installs the lockfile exactly, so a run is
+      # reproducible and a dependency can't drift under the tests.
+      - run: npm ci
+      - run: npm test

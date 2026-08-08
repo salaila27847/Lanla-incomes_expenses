@@ -66,7 +66,7 @@ The food/goods caps are **per cycle**, not per day. An earlier version compared 
 
 The dashboard's two balances come from different places on purpose: the **spending** account is derived (`opening_balance` + income − expenses, run forward over *every* cycle on record, not just the displayed year), while the **savings** account is entered by hand per cycle, because money sometimes leaves it directly — which is what the SavingsQR transfer-back flow exists to reverse.
 
-Nothing is stubbed anymore at the route level; remaining work is real accounts/credentials (`SETUP.md`, `TYPHOON_API_KEY`, `SAVINGS_PROMPTPAY_ID`) and no test suite/CI yet.
+Nothing is stubbed anymore at the route level; remaining work is real accounts/credentials (`SETUP.md`, `TYPHOON_API_KEY`, `SAVINGS_PROMPTPAY_ID`).
 
 ## Commands
 
@@ -99,9 +99,11 @@ Each service has its own `.env.example` — copy to `.env` and fill in before ru
 
 ## Tests
 
-`/backend` (pytest), `/controller` (vitest + supertest) and `/frontend` (vitest) have suites; there is no linter or CI in any of the three. The frontend's covers pure helpers only — there is no DOM or component testing set up.
+`/backend` (pytest), `/controller` (vitest + supertest) and `/frontend` (vitest) have suites; there is no linter in any of the three. The frontend's covers pure helpers only — there is no DOM or component testing set up.
 
-Both suites run fully offline — the backend fakes Typhoon with `httpx.MockTransport` (see the `typhoon` fixture in `backend/tests/conftest.py`), and the controller runs the Sheets client in `SHEETS_MOCK_MODE` and stubs `fetch` for backend calls. No API keys or network access needed.
+All three run fully offline — the backend fakes Typhoon with `httpx.MockTransport` (see the `typhoon` fixture in `backend/tests/conftest.py`), and the controller runs the Sheets client in `SHEETS_MOCK_MODE` and stubs `fetch` for backend calls. No API keys or network access needed.
+
+`.github/workflows/test.yml` runs all three on every pull request and on `main` after a merge. Because the suites need no credentials, CI is configured with no secrets at all. It is separate from Vercel's three checks, which only prove each service *builds* — a wrong sum type-checks, builds and deploys perfectly.
 
 Three things worth knowing before adding tests:
 

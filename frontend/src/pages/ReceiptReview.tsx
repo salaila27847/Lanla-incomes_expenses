@@ -6,6 +6,7 @@ import MasterItemPicker, {
 } from "../components/MasterItemPicker";
 
 type ReceiptCategory = "food" | "goods";
+type PaidFrom = "spending" | "savings";
 
 interface ReceiptLineItem {
   id: string;
@@ -22,6 +23,9 @@ interface ReceiptLineItem {
   candidates: MatchCandidate[];
   /** Whether the matcher was confident enough to fill this in itself. */
   autoMatched: boolean;
+  /** Which account actually paid for this line. "savings" holds the item
+   *  back from PriceHistory until the transfer-back QR is confirmed. */
+  paidFrom: PaidFrom;
 }
 
 interface ScanResponseItem {
@@ -79,6 +83,7 @@ export default function ReceiptReview() {
   const [purchasedAt, setPurchasedAt] = useState<string | null>(null);
   const [items, setItems] = useState<ReceiptLineItem[]>([]);
   const [masterItems, setMasterItems] = useState<MasterItem[]>([]);
+  const [savedPendingSavingsCount, setSavedPendingSavingsCount] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -121,6 +126,7 @@ export default function ReceiptReview() {
           masterItemName: item.master_item_name ?? "",
           candidates: item.candidates ?? [],
           autoMatched: item.matched,
+          paidFrom: "spending",
         })),
       );
       // A discount off the whole receipt belongs to no single product, so
@@ -139,6 +145,7 @@ export default function ReceiptReview() {
             masterItemName: BILL_DISCOUNT_NAME,
             candidates: [],
             autoMatched: false,
+            paidFrom: "spending",
           },
         ]);
       }
@@ -166,6 +173,7 @@ export default function ReceiptReview() {
         masterItemName: "",
         candidates: [],
         autoMatched: false,
+        paidFrom: "spending",
       },
     ]);
     if (!purchasedAt) setPurchasedAt(today());
@@ -199,12 +207,14 @@ export default function ReceiptReview() {
             discount: amountOr0(item.discount),
             master_item_name: item.masterItemName.trim(),
             category: item.category,
+            paid_from: item.paidFrom,
           })),
         }),
       });
       if (!response.ok) {
         throw new Error(`บันทึกไม่สำเร็จ (${response.status})`);
       }
+      setSavedPendingSavingsCount(items.filter((item) => item.paidFrom === "savings").length);
       setItems([]);
       setStore(null);
       setStatus("saved");
@@ -272,7 +282,13 @@ export default function ReceiptReview() {
       )}
 
       {status === "error" && errorMessage && <p className="text-sm text-red-400">{errorMessage}</p>}
-      {status === "saved" && <p className="text-sm text-emerald-400">บันทึกสำเร็จ</p>}
+      {status === "saved" && (
+        <p className="text-sm text-emerald-400">
+          บันทึกสำเร็จ
+          {savedPendingSavingsCount > 0 &&
+            ` — มี ${savedPendingSavingsCount} รายการรอโอนคืนเข้าบัญชีออม ไปที่หน้า QR Code เพื่อยืนยัน`}
+        </p>
+      )}
 
       {items.length === 0 ? (
         <p className="text-sm text-slate-500">ยังไม่มีรายการ</p>
@@ -340,6 +356,23 @@ export default function ReceiptReview() {
                     className="shrink-0 rounded-full bg-slate-800 px-3 py-2 text-sm"
                   >
                     {item.category === "food" ? "🍔 กิน" : "🧴 ใช้"}
+                  </button>
+
+                  {/* Doesn't touch PriceHistory directly — a savings-paid
+                      line waits in the QR page's pending list until the
+                      transfer-back is actually confirmed. */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      patchItem(item.id, {
+                        paidFrom: item.paidFrom === "savings" ? "spending" : "savings",
+                      })
+                    }
+                    className={`shrink-0 rounded-full px-3 py-2 text-sm ${
+                      item.paidFrom === "savings" ? "bg-amber-700" : "bg-slate-800"
+                    }`}
+                  >
+                    {item.paidFrom === "savings" ? "💰 เงินออม KTB" : "บัญชีหลัก"}
                   </button>
 
                   <div className="flex shrink-0 items-center rounded-full bg-slate-800">

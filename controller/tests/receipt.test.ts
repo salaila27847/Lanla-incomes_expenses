@@ -245,6 +245,73 @@ describe("POST /receipt/confirm", () => {
     expect((await sheets.readPriceHistory())[0].store).toBeNull();
   });
 
+  describe("paid_from", () => {
+    it("defaults to spending, unchanged from before the field existed", async () => {
+      const { app, sheets } = await buildApp();
+
+      await request(app).post("/receipt/confirm").send(confirmBody);
+
+      expect(await sheets.readPriceHistory()).toHaveLength(1);
+      expect(await sheets.readPendingSavingsItems()).toHaveLength(0);
+    });
+
+    it("holds a savings-paid line back from PriceHistory", async () => {
+      const { app, sheets } = await buildApp();
+
+      const response = await request(app)
+        .post("/receipt/confirm")
+        .send({
+          ...confirmBody,
+          items: [{ ...confirmBody.items[0], paid_from: "savings" }],
+        });
+
+      expect(response.body).toMatchObject({
+        price_history_rows_written: 0,
+        pending_savings_rows_written: 1,
+      });
+      expect(await sheets.readPriceHistory()).toHaveLength(0);
+      expect(await sheets.readPendingSavingsItems()).toMatchObject([
+        { masterItemName: "นมสด UHT 250ml", category: "food", price: 15, date: "2026-08-04" },
+      ]);
+    });
+
+    it("still creates the master item for a savings-paid line", async () => {
+      const { app, sheets } = await buildApp();
+
+      await request(app)
+        .post("/receipt/confirm")
+        .send({
+          ...confirmBody,
+          items: [{ ...confirmBody.items[0], paid_from: "savings" }],
+        });
+
+      expect(await sheets.readMasterItems()).toMatchObject([
+        { name: "นมสด UHT 250ml", category: "food" },
+      ]);
+    });
+
+    it("splits a mixed receipt between the two", async () => {
+      const { app, sheets } = await buildApp();
+
+      const response = await request(app)
+        .post("/receipt/confirm")
+        .send({
+          ...confirmBody,
+          items: [
+            confirmBody.items[0],
+            { ...confirmBody.items[0], master_item_name: "ผงซักฟอก", category: "goods", paid_from: "savings" },
+          ],
+        });
+
+      expect(response.body).toMatchObject({
+        price_history_rows_written: 1,
+        pending_savings_rows_written: 1,
+      });
+      expect(await sheets.readPriceHistory()).toHaveLength(1);
+      expect(await sheets.readPendingSavingsItems()).toHaveLength(1);
+    });
+  });
+
   describe("rejects incomplete input without writing anything", () => {
     it("an empty item list", async () => {
       const { app, sheets } = await buildApp();

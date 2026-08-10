@@ -10,7 +10,7 @@ The same file has a `checkTrackerSheet` you can run afterwards: it reads nothing
 
 The rest of this section is the reference for what the script builds (or for doing it by hand).
 
-Create a new Google Sheet with six tabs, each with an exact header row in row 1:
+Create a new Google Sheet with seven tabs, each with an exact header row in row 1:
 
 **Tab `MasterItems`**
 | Name | Category | CreatedAt |
@@ -59,6 +59,18 @@ falls inside it, so a payday on 26 Dec 2025 belongs to cycle `2026-01`. You
 can fill in the whole year at once from the app's แดชบอร์ด page; any month
 left blank is estimated from the nearest one you did enter.
 
+**Tab `PendingSavings`**
+| ID | Date | Store | MasterItemName | Category | Price | Quantity | Discount | CreatedAt |
+|----|------|-------|-----------------|----------|-------|----------|-----------|-----------|
+
+A line marked "paid from savings" on the receipt-review screen lands here
+instead of `PriceHistory` — it isn't a recorded expense yet. It moves to
+`PriceHistory` (same columns, same meaning) once the transfer-back QR is
+confirmed on the SavingsQR page, using this row's own `Date` rather than
+the confirmation date, so a purchase near the end of a pay cycle can't jump
+into the wrong one just because it was confirmed later. Confirming or
+cancelling it removes the row from here.
+
 **Tab `Income`**
 | ID | Date | Source | Amount |
 |----|------|--------|--------|
@@ -98,4 +110,4 @@ SHEETS_SPREADSHEET_ID=<the ID from step 1>
 SHEETS_MOCK_MODE=false
 ```
 
-Restart the controller. All of `controller/src/sheets/client.ts` (master items, price history, must-pay, cycles, income, settings) now hits the real Sheet instead of the in-memory mock.
+Restart the controller. All of `controller/src/sheets/client.ts` (master items, price history, pending savings transfers, must-pay, cycles, income, settings) now hits the real Sheet instead of the in-memory mock.

@@ -92,3 +92,119 @@ describe("POST /qr", () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+/**
+ * A line paid straight from the savings account isn't a recorded expense
+ * yet — /receipt/confirm holds it here instead of writing PriceHistory.
+ * These routes are how it either becomes a real expense (once the
+ * transfer-back QR has actually been sent) or gets cancelled outright.
+ */
+describe("/qr/pending", () => {
+  async function buildAppWithSheets() {
+    vi.resetModules();
+    vi.stubEnv("SHEETS_MOCK_MODE", "true");
+    vi.stubEnv("PYTHON_BACKEND_URL", BACKEND);
+
+    const { qrRouter } = await import("../src/routes/qr");
+    const sheets = await import("../src/sheets/client");
+
+    const app = express();
+    app.use(express.json());
+    app.use("/qr", qrRouter);
+    return { app, sheets };
+  }
+
+  it("lists what's waiting to be transferred", async () => {
+    const { app, sheets } = await buildAppWithSheets();
+    await sheets.appendPendingSavingsItem({
+      date: "2026-08-04",
+      store: "7-Eleven",
+      masterItemName: "นมสด UHT 250ml",
+      category: "food",
+      price: 15,
+      quantity: 1,
+      discount: 0,
+    });
+
+    const response = await request(app).get("/qr/pending");
+
+    expect(response.status).toBe(200);
+    expect(response.body.items).toMatchObject([{ masterItemName: "นมสด UHT 250ml" }]);
+  });
+
+  it("moves a confirmed item into PriceHistory using its original purchase date", async () => {
+    // Confirming can happen days after the purchase — it must not jump
+    // the item into whatever cycle "today" falls in.
+    const { app, sheets } = await buildAppWithSheets();
+    const pending = await sheets.appendPendingSavingsItem({
+      date: "2026-07-28",
+      store: "Big C",
+      masterItemName: "ผงซักฟอก",
+      category: "goods",
+      price: 120,
+      quantity: 1,
+      discount: 0,
+    });
+
+    const response = await request(app).post(`/qr/pending/${pending.id}/confirm`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ success: true, id: pending.id });
+    expect(await sheets.readPendingSavingsItems()).toHaveLength(0);
+    expect(await sheets.readPriceHistory()).toMatchObject([
+      { date: "2026-07-28", store: "Big C", masterItemName: "ผงซักฟอก", price: 120 },
+    ]);
+  });
+
+  it("creates the master item on confirm if it's new", async () => {
+    const { app, sheets } = await buildAppWithSheets();
+    const pending = await sheets.appendPendingSavingsItem({
+      date: "2026-07-28",
+      store: null,
+      masterItemName: "ผงซักฟอก",
+      category: "goods",
+      price: 120,
+      quantity: 1,
+      discount: 0,
+    });
+
+    await request(app).post(`/qr/pending/${pending.id}/confirm`);
+
+    expect(await sheets.readMasterItems()).toMatchObject([{ name: "ผงซักฟอก", category: "goods" }]);
+  });
+
+  it("404s confirming an id that doesn't exist", async () => {
+    const { app } = await buildAppWithSheets();
+
+    const response = await request(app).post("/qr/pending/does-not-exist/confirm");
+
+    expect(response.status).toBe(404);
+  });
+
+  it("deletes a pending item without writing it anywhere", async () => {
+    const { app, sheets } = await buildAppWithSheets();
+    const pending = await sheets.appendPendingSavingsItem({
+      date: "2026-08-04",
+      store: null,
+      masterItemName: "นมสด UHT 250ml",
+      category: "food",
+      price: 15,
+      quantity: 1,
+      discount: 0,
+    });
+
+    const response = await request(app).delete(`/qr/pending/${pending.id}`);
+
+    expect(response.status).toBe(200);
+    expect(await sheets.readPendingSavingsItems()).toHaveLength(0);
+    expect(await sheets.readPriceHistory()).toHaveLength(0);
+  });
+
+  it("404s deleting an id that doesn't exist", async () => {
+    const { app } = await buildAppWithSheets();
+
+    const response = await request(app).delete("/qr/pending/does-not-exist");
+
+    expect(response.status).toBe(404);
+  });
+});

@@ -1,7 +1,7 @@
 /**
  * One-time setup for the Smart Expense & Price Tracker's Google Sheet.
  *
- * Creates any of the six tabs the controller expects that don't exist yet,
+ * Creates any of the seven tabs the controller expects that don't exist yet,
  * with the exact header row and column formats it reads back.
  *
  * How to run it:
@@ -43,6 +43,17 @@ var TABS = [
       'Date', 'Store', 'MasterItemName', 'Category', 'Price', 'Quantity', 'ID', 'Discount',
     ],
     textColumns: [1, 7], // Date, ID
+  },
+  {
+    // A line paid straight from the savings account isn't a recorded
+    // expense yet -- it sits here until the transfer-back QR is confirmed
+    // on the SavingsQR page, at which point it moves to PriceHistory using
+    // this row's own Date (not the confirmation date).
+    name: 'PendingSavings',
+    headers: [
+      'ID', 'Date', 'Store', 'MasterItemName', 'Category', 'Price', 'Quantity', 'Discount', 'CreatedAt',
+    ],
+    textColumns: [1, 2, 9], // ID, Date, CreatedAt
   },
   {
     name: 'MustPay',
@@ -144,6 +155,7 @@ function checkTrackerSheet() {
     { tab: 'Cycles', column: 1, label: 'CycleKey', regex: /^\d{4}-\d{2}$/, want: 'YYYY-MM' },
     { tab: 'Cycles', column: 2, label: 'PaydayDate', regex: /^\d{4}-\d{2}-\d{2}$/, want: 'YYYY-MM-DD' },
     { tab: 'Income', column: 2, label: 'Date', regex: /^\d{4}-\d{2}-\d{2}$/, want: 'YYYY-MM-DD' },
+    { tab: 'PendingSavings', column: 2, label: 'Date', regex: /^\d{4}-\d{2}-\d{2}$/, want: 'YYYY-MM-DD' },
   ];
   var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   var problems = [];
@@ -190,7 +202,7 @@ function checkTrackerSheet() {
 
   var summary = problems.length
     ? 'Found ' + problems.length + ' thing(s) to fix:\n\n- ' + problems.join('\n- ')
-    : 'All six tabs are present and every dated column reads back in the format the app expects.';
+    : 'All seven tabs are present and every dated column reads back in the format the app expects.';
 
   Logger.log(summary);
   SpreadsheetApp.getUi().alert(summary);

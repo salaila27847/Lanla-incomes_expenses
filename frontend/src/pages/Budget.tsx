@@ -209,20 +209,16 @@ export default function Budget() {
             : "กำลังโหลด..."}
         </p>
         <div className="mt-2 grid grid-cols-2 gap-3">
-          <div className="rounded-lg border border-slate-800 p-3">
-            <p className="text-xs text-slate-500">🍔 ค่ากิน</p>
-            <p className="text-lg">
-              {(budget?.spentThisCycle.food ?? 0).toLocaleString()} /{" "}
-              {(budget?.cycleBudget.food ?? 5000).toLocaleString()} บาท
-            </p>
-          </div>
-          <div className="rounded-lg border border-slate-800 p-3">
-            <p className="text-xs text-slate-500">🧴 ของใช้</p>
-            <p className="text-lg">
-              {(budget?.spentThisCycle.goods ?? 0).toLocaleString()} /{" "}
-              {(budget?.cycleBudget.goods ?? 5000).toLocaleString()} บาท
-            </p>
-          </div>
+          <BudgetCard
+            label="🍔 ค่ากิน"
+            spent={budget?.spentThisCycle.food ?? 0}
+            cap={budget?.cycleBudget.food ?? 5000}
+          />
+          <BudgetCard
+            label="🧴 ของใช้"
+            spent={budget?.spentThisCycle.goods ?? 0}
+            cap={budget?.cycleBudget.goods ?? 5000}
+          />
         </div>
       </div>
 
@@ -367,6 +363,26 @@ export default function Budget() {
         )}
       </div>
     </section>
+  );
+}
+
+/** One of the two cap cards — spent/cap plus how much of the cap is left,
+ *  called out separately once it goes negative rather than just printing
+ *  a minus sign next to "คงเหลือ". */
+function BudgetCard({ label, spent, cap }: { label: string; spent: number; cap: number }) {
+  const remaining = cap - spent;
+  return (
+    <div className="rounded-lg border border-slate-800 p-3">
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className="text-lg">
+        {spent.toLocaleString()} / {cap.toLocaleString()} บาท
+      </p>
+      <p className={`text-xs ${remaining < 0 ? "text-red-400" : "text-slate-500"}`}>
+        {remaining < 0
+          ? `เกินงบ ${Math.abs(remaining).toLocaleString()} บาท`
+          : `คงเหลือ ${remaining.toLocaleString()} บาท`}
+      </p>
+    </div>
   );
 }
 

@@ -147,6 +147,24 @@ export function isDiscountOnly(row: Pick<PriceHistoryRow, "price" | "discount">)
   return row.price === 0 && row.discount > 0;
 }
 
+// A line paid straight out of the savings account isn't a recorded expense
+// yet — it sits here until the transfer-back QR is actually confirmed, so
+// the record of "money left savings" is tied to the real-world action
+// instead of a box someone has to remember to check later. Same shape as
+// PriceHistoryRow (minus id/createdAt semantics) so confirming it is just
+// appendPriceHistoryRow with this row's own data, unchanged.
+export interface PendingSavingsItem {
+  id: string;
+  date: string;
+  store: string | null;
+  masterItemName: string;
+  category: ItemCategory;
+  price: number;
+  quantity: number;
+  discount: number;
+  createdAt: string;
+}
+
 export type MustPayStatus = "unpaid" | "paid";
 
 export interface MustPayItem {
@@ -180,6 +198,7 @@ export type SettingsMap = Record<string, string>;
 const mockMasterItems: MasterItem[] = [];
 const mockPriceHistory: PriceHistoryRow[] = [];
 const mockMustPayItems: MustPayItem[] = [];
+const mockPendingSavingsItems: PendingSavingsItem[] = [];
 const mockCycleRows: CycleRow[] = [];
 const mockIncome: IncomeEntry[] = [];
 const mockSettings: SettingsMap = {};
@@ -319,6 +338,74 @@ export async function deletePriceHistoryRow(id: string): Promise<boolean> {
   if (rowNumber === null) return false;
   // Blanked, not removed — see the note on `row:<n>` above, and deleteIncome.
   await updateRange(`PriceHistory!A${rowNumber}:H${rowNumber}`, ["", "", "", "", "", "", "", ""]);
+  return true;
+}
+
+// --- Pending savings transfers -----------------------------------------
+// A tab added after the original six in SETUP.md, so a Sheet that
+// predates it has no "PendingSavings" tab yet — readOptionalRange treats
+// that as zero rows instead of a 500, same as Cycles/Income/Settings.
+
+export async function readPendingSavingsItems(): Promise<PendingSavingsItem[]> {
+  if (MOCK_MODE) {
+    return mockPendingSavingsItems;
+  }
+  const rows = await readOptionalRange("PendingSavings!A2:I");
+  return rows
+    .filter((row) => row[0])
+    .map((row) => ({
+      id: String(row[0]),
+      date: String(row[1]),
+      store: row[2] ? String(row[2]) : null,
+      masterItemName: String(row[3]),
+      category: row[4] === "goods" ? "goods" : "food",
+      price: toNumber(row[5]),
+      quantity: toOptionalNumber(row[6]) ?? 1,
+      discount: toNumber(row[7]),
+      createdAt: String(row[8]),
+    }));
+}
+
+export async function appendPendingSavingsItem(
+  input: Omit<PendingSavingsItem, "id" | "createdAt">,
+): Promise<PendingSavingsItem> {
+  const item: PendingSavingsItem = {
+    ...input,
+    id: randomUUID(),
+    createdAt: new Date().toISOString(),
+  };
+  if (MOCK_MODE) {
+    mockPendingSavingsItems.push(item);
+    return item;
+  }
+  await appendRow("PendingSavings!A:I", [
+    item.id,
+    item.date,
+    item.store ?? "",
+    item.masterItemName,
+    item.category,
+    item.price,
+    item.quantity,
+    item.discount,
+    item.createdAt,
+  ]);
+  return item;
+}
+
+export async function deletePendingSavingsItem(id: string): Promise<boolean> {
+  if (MOCK_MODE) {
+    const index = mockPendingSavingsItems.findIndex((item) => item.id === id);
+    if (index === -1) return false;
+    mockPendingSavingsItems.splice(index, 1);
+    return true;
+  }
+
+  const rowNumber = await findRowNumber("PendingSavings!A2:A", id);
+  if (rowNumber === null) return false;
+  // Blanked, not removed — same reasoning as every other delete here.
+  await updateRange(`PendingSavings!A${rowNumber}:I${rowNumber}`, [
+    "", "", "", "", "", "", "", "", "",
+  ]);
   return true;
 }
 

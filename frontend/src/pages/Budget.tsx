@@ -9,6 +9,9 @@ interface MustPayItem {
   amount: number;
   status: MustPayStatus;
   paidAt: string | null;
+  /** Set when this row was generated from a RecurringBill (or a shared
+   *  card group) rather than typed in by hand. */
+  recurringGroupKey: string | null;
 }
 
 interface Cycle {
@@ -17,11 +20,23 @@ interface Cycle {
   end: string;
 }
 
+interface RecurringBill {
+  id: string;
+  name: string;
+  amount: number;
+  cardGroup: string | null;
+  /** null = no end date, recurs forever (rent, utilities). A number counts
+   *  down each cycle it generates a row and stops on its own at zero. */
+  installmentsRemaining: number | null;
+  active: boolean;
+}
+
 interface BudgetResponse {
   cycle: Cycle | null;
   cycleBudget: { food: number; goods: number };
   spentThisCycle: { food: number; goods: number };
   mustPay: MustPayItem[];
+  recurringBills: RecurringBill[];
 }
 
 const THAI_MONTHS = [
@@ -73,6 +88,13 @@ export default function Budget() {
   const [newName, setNewName] = useState("");
   const [newAmount, setNewAmount] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  const [confirmingStopId, setConfirmingStopId] = useState<string | null>(null);
+  const [recurringName, setRecurringName] = useState("");
+  const [recurringAmount, setRecurringAmount] = useState("");
+  const [recurringInstallments, setRecurringInstallments] = useState("");
+  const [recurringCardGroup, setRecurringCardGroup] = useState("");
+  const [submittingRecurring, setSubmittingRecurring] = useState(false);
 
   async function loadBudget() {
     try {
@@ -175,6 +197,58 @@ export default function Budget() {
     }
   }
 
+  async function handleAddRecurring(event: React.FormEvent) {
+    event.preventDefault();
+    const amount = parseAmount(recurringAmount);
+    if (!recurringName.trim() || amount === null || amount <= 0) return;
+
+    const installmentsText = recurringInstallments.trim();
+    const installments = installmentsText ? Number(installmentsText) : undefined;
+    if (installmentsText && (!Number.isInteger(installments) || (installments as number) <= 0)) {
+      setErrorMessage("จำนวนงวดต้องเป็นเลขจำนวนเต็มบวก หรือเว้นว่างถ้าไม่มีกำหนด");
+      return;
+    }
+
+    setSubmittingRecurring(true);
+    setErrorMessage(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/budget/recurring`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: recurringName.trim(),
+          amount,
+          cardGroup: recurringCardGroup.trim() || undefined,
+          installments,
+        }),
+      });
+      if (!response.ok) throw new Error(`เพิ่มบิลประจำไม่สำเร็จ (${response.status})`);
+      setRecurringName("");
+      setRecurringAmount("");
+      setRecurringInstallments("");
+      setRecurringCardGroup("");
+      await loadBudget();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ");
+    } finally {
+      setSubmittingRecurring(false);
+    }
+  }
+
+  async function handleStopRecurring(id: string) {
+    setErrorMessage(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/budget/recurring/${encodeURIComponent(id)}/stop`, {
+        method: "POST",
+      });
+      if (!response.ok) throw new Error(`หยุดบิลประจำไม่สำเร็จ (${response.status})`);
+      setConfirmingStopId(null);
+      await loadBudget();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ");
+    }
+  }
+
   async function handleSetPaid(id: string, paid: boolean) {
     setErrorMessage(null);
     const status = paid ? "paid" : "unpaid";
@@ -209,20 +283,16 @@ export default function Budget() {
             : "กำลังโหลด..."}
         </p>
         <div className="mt-2 grid grid-cols-2 gap-3">
-          <div className="rounded-lg border border-slate-800 p-3">
-            <p className="text-xs text-slate-500">🍔 ค่ากิน</p>
-            <p className="text-lg">
-              {(budget?.spentThisCycle.food ?? 0).toLocaleString()} /{" "}
-              {(budget?.cycleBudget.food ?? 5000).toLocaleString()} บาท
-            </p>
-          </div>
-          <div className="rounded-lg border border-slate-800 p-3">
-            <p className="text-xs text-slate-500">🧴 ของใช้</p>
-            <p className="text-lg">
-              {(budget?.spentThisCycle.goods ?? 0).toLocaleString()} /{" "}
-              {(budget?.cycleBudget.goods ?? 5000).toLocaleString()} บาท
-            </p>
-          </div>
+          <BudgetCard
+            label="🍔 ค่ากิน"
+            spent={budget?.spentThisCycle.food ?? 0}
+            cap={budget?.cycleBudget.food ?? 5000}
+          />
+          <BudgetCard
+            label="🧴 ของใช้"
+            spent={budget?.spentThisCycle.goods ?? 0}
+            cap={budget?.cycleBudget.goods ?? 5000}
+          />
         </div>
       </div>
 
@@ -257,7 +327,10 @@ export default function Budget() {
                 </li>
               ) : (
                 <li key={item.id} className="flex items-center justify-between gap-2 py-2 text-sm">
-                  <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {item.recurringGroupKey && <span title="สร้างจากบิลประจำ">🔁 </span>}
+                    {item.name}
+                  </span>
                   <span className="shrink-0 tabular-nums">
                     {item.amount.toLocaleString()} บาท
                   </span>
@@ -321,6 +394,109 @@ export default function Budget() {
       </div>
 
       <div>
+        <h2 className="text-base font-medium">บิลประจำ</h2>
+        <p className="text-xs text-slate-500">
+          สร้างรายการที่ต้องจ่ายให้อัตโนมัติทุกรอบ — บิลที่ผ่านบัตรเดียวกันจะรวมยอดเป็นรายการเดียว
+        </p>
+
+        {!budget || budget.recurringBills.length === 0 ? (
+          <p className="mt-2 text-sm text-slate-500">ยังไม่มีบิลประจำ</p>
+        ) : (
+          <ul className="mt-2 divide-y divide-slate-800">
+            {budget.recurringBills.map((bill) =>
+              confirmingStopId === bill.id ? (
+                <li key={bill.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+                  <span className="min-w-0 flex-1 truncate text-slate-400">
+                    หยุด “{bill.name}”? รายการรอบก่อนหน้ายังอยู่เหมือนเดิม
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingStopId(null)}
+                    className="shrink-0 rounded-full bg-slate-800 px-3 py-1.5"
+                  >
+                    ยกเลิก
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleStopRecurring(bill.id)}
+                    className="shrink-0 rounded-full bg-red-700 px-3 py-1.5"
+                  >
+                    หยุด
+                  </button>
+                </li>
+              ) : (
+                <li key={bill.id} className="space-y-0.5 py-2 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 flex-1 truncate">{bill.name}</span>
+                    <span className="shrink-0 tabular-nums">{bill.amount.toLocaleString()} บาท</span>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingStopId(bill.id)}
+                      className="shrink-0 px-2 py-1 text-xs text-slate-500"
+                    >
+                      หยุด
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    {bill.cardGroup && `ผ่านบัตร: ${bill.cardGroup} · `}
+                    {bill.installmentsRemaining === null
+                      ? "ไม่มีกำหนด"
+                      : `เหลืออีก ${bill.installmentsRemaining} งวด`}
+                  </p>
+                </li>
+              ),
+            )}
+          </ul>
+        )}
+
+        <form onSubmit={handleAddRecurring} className="mt-3 space-y-2">
+          <input
+            value={recurringName}
+            onChange={(event) => setRecurringName(event.target.value)}
+            placeholder="ชื่อรายการ เช่น ผ่อนโทรศัพท์"
+            className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+          />
+          <input
+            value={recurringAmount}
+            onChange={(event) => setRecurringAmount(event.target.value)}
+            inputMode="decimal"
+            placeholder="จำนวนเงินต่องวด (บาท)"
+            className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+          />
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              value={recurringInstallments}
+              onChange={(event) => setRecurringInstallments(event.target.value)}
+              inputMode="numeric"
+              placeholder="จำนวนงวด (ว่าง = ไม่มีกำหนด)"
+              className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+            />
+            <input
+              value={recurringCardGroup}
+              onChange={(event) => setRecurringCardGroup(event.target.value)}
+              list="recurring-card-groups"
+              placeholder="ผ่านบัตร (ถ้ามี)"
+              className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+            />
+            <datalist id="recurring-card-groups">
+              {Array.from(new Set((budget?.recurringBills ?? []).map((bill) => bill.cardGroup).filter(Boolean))).map(
+                (cardGroup) => (
+                  <option key={cardGroup} value={cardGroup ?? ""} />
+                ),
+              )}
+            </datalist>
+          </div>
+          <button
+            type="submit"
+            disabled={submittingRecurring}
+            className="w-full rounded-lg bg-sky-600 py-2 text-sm font-medium disabled:opacity-50"
+          >
+            {submittingRecurring ? "กำลังเพิ่ม..." : "เพิ่มบิลประจำ"}
+          </button>
+        </form>
+      </div>
+
+      <div>
         <h2 className="text-base font-medium">รายการซื้อของรอบนี้</h2>
         <p className="text-xs text-slate-500">
           แตะที่รายการเพื่อแก้ไข — สลิปที่สแกนมาผิดแก้ตรงนี้ได้เลย
@@ -367,6 +543,26 @@ export default function Budget() {
         )}
       </div>
     </section>
+  );
+}
+
+/** One of the two cap cards — spent/cap plus how much of the cap is left,
+ *  called out separately once it goes negative rather than just printing
+ *  a minus sign next to "คงเหลือ". */
+function BudgetCard({ label, spent, cap }: { label: string; spent: number; cap: number }) {
+  const remaining = cap - spent;
+  return (
+    <div className="rounded-lg border border-slate-800 p-3">
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className="text-lg">
+        {spent.toLocaleString()} / {cap.toLocaleString()} บาท
+      </p>
+      <p className={`text-xs ${remaining < 0 ? "text-red-400" : "text-slate-500"}`}>
+        {remaining < 0
+          ? `เกินงบ ${Math.abs(remaining).toLocaleString()} บาท`
+          : `คงเหลือ ${remaining.toLocaleString()} บาท`}
+      </p>
+    </div>
   );
 }
 

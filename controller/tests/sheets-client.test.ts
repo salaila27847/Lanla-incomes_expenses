@@ -227,9 +227,9 @@ describe("real mode row mapping", () => {
 
   it("parses must-pay rows including the paid timestamp", async () => {
     const { client } = await loadWithFakeSheets({
-      "MustPay!A2:F": [
-        ["id-1", "ค่าไฟ", "1200", "2026-08", "paid", "2026-08-04T10:00:00Z"],
-        ["id-2", "ค่าน้ำ", "300", "2026-08", "unpaid", ""],
+      "MustPay!A2:G": [
+        ["id-1", "ค่าไฟ", "1200", "2026-08", "paid", "2026-08-04T10:00:00Z", ""],
+        ["id-2", "ค่าน้ำ", "300", "2026-08", "unpaid", "", "recurring-key-1"],
       ],
     });
 
@@ -241,6 +241,7 @@ describe("real mode row mapping", () => {
         month: "2026-08",
         status: "paid",
         paidAt: "2026-08-04T10:00:00Z",
+        recurringGroupKey: null,
       },
       {
         id: "id-2",
@@ -249,6 +250,7 @@ describe("real mode row mapping", () => {
         month: "2026-08",
         status: "unpaid",
         paidAt: null,
+        recurringGroupKey: "recurring-key-1",
       },
     ]);
   });
@@ -670,8 +672,8 @@ describe("deleting a must-pay item", () => {
 
     expect(await client.deleteMustPayItem("id-2")).toBe(true);
     expect(calls.update[0]).toEqual({
-      range: "MustPay!A3:F3",
-      values: ["", "", "", "", "", ""],
+      range: "MustPay!A3:G3",
+      values: ["", "", "", "", "", "", ""],
     });
   });
 

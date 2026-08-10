@@ -147,6 +147,24 @@ export function isDiscountOnly(row: Pick<PriceHistoryRow, "price" | "discount">)
   return row.price === 0 && row.discount > 0;
 }
 
+// A line paid straight out of the savings account isn't a recorded expense
+// yet — it sits here until the transfer-back QR is actually confirmed, so
+// the record of "money left savings" is tied to the real-world action
+// instead of a box someone has to remember to check later. Same shape as
+// PriceHistoryRow (minus id/createdAt semantics) so confirming it is just
+// appendPriceHistoryRow with this row's own data, unchanged.
+export interface PendingSavingsItem {
+  id: string;
+  date: string;
+  store: string | null;
+  masterItemName: string;
+  category: ItemCategory;
+  price: number;
+  quantity: number;
+  discount: number;
+  createdAt: string;
+}
+
 export type MustPayStatus = "unpaid" | "paid";
 
 export interface MustPayItem {
@@ -156,6 +174,32 @@ export interface MustPayItem {
   month: string; // a pay-cycle key (YYYY-MM), see src/cycles.ts
   status: MustPayStatus;
   paidAt: string | null;
+  /** Which RecurringBill (or, for a shared card, its cardGroup name)
+   *  generated this row — null for a manually-added one-off. Lets
+   *  generateRecurringMustPay tell "already created this cycle" apart
+   *  from "the user typed the same name by hand". */
+  recurringGroupKey: string | null;
+}
+
+// A recurring bill isn't a MustPay row itself — it's the template that
+// generates one each cycle, since a single cycle's row can be edited or
+// marked paid independently of the template it came from.
+//
+// installmentsRemaining is null for something with no natural end (rent,
+// utilities): it recurs forever. A number counts down each time it
+// generates a row and the bill goes inactive at zero, so an instalment
+// plan stops on its own instead of needing to be remembered and cancelled.
+//
+// cardGroup lets several instalments billed through the same card collapse
+// into one MustPay row each cycle — what you actually pay is one card
+// statement, not one transfer per product on it.
+export interface RecurringBill {
+  id: string;
+  name: string;
+  amount: number;
+  cardGroup: string | null;
+  installmentsRemaining: number | null;
+  active: boolean;
 }
 
 export interface CycleRow {
@@ -180,6 +224,8 @@ export type SettingsMap = Record<string, string>;
 const mockMasterItems: MasterItem[] = [];
 const mockPriceHistory: PriceHistoryRow[] = [];
 const mockMustPayItems: MustPayItem[] = [];
+const mockPendingSavingsItems: PendingSavingsItem[] = [];
+const mockRecurringBills: RecurringBill[] = [];
 const mockCycleRows: CycleRow[] = [];
 const mockIncome: IncomeEntry[] = [];
 const mockSettings: SettingsMap = {};
@@ -322,11 +368,82 @@ export async function deletePriceHistoryRow(id: string): Promise<boolean> {
   return true;
 }
 
+// --- Pending savings transfers -----------------------------------------
+// A tab added after the original six in SETUP.md, so a Sheet that
+// predates it has no "PendingSavings" tab yet — readOptionalRange treats
+// that as zero rows instead of a 500, same as Cycles/Income/Settings.
+
+export async function readPendingSavingsItems(): Promise<PendingSavingsItem[]> {
+  if (MOCK_MODE) {
+    return mockPendingSavingsItems;
+  }
+  const rows = await readOptionalRange("PendingSavings!A2:I");
+  return rows
+    .filter((row) => row[0])
+    .map((row) => ({
+      id: String(row[0]),
+      date: String(row[1]),
+      store: row[2] ? String(row[2]) : null,
+      masterItemName: String(row[3]),
+      category: row[4] === "goods" ? "goods" : "food",
+      price: toNumber(row[5]),
+      quantity: toOptionalNumber(row[6]) ?? 1,
+      discount: toNumber(row[7]),
+      createdAt: String(row[8]),
+    }));
+}
+
+export async function appendPendingSavingsItem(
+  input: Omit<PendingSavingsItem, "id" | "createdAt">,
+): Promise<PendingSavingsItem> {
+  const item: PendingSavingsItem = {
+    ...input,
+    id: randomUUID(),
+    createdAt: new Date().toISOString(),
+  };
+  if (MOCK_MODE) {
+    mockPendingSavingsItems.push(item);
+    return item;
+  }
+  await appendRow("PendingSavings!A:I", [
+    item.id,
+    item.date,
+    item.store ?? "",
+    item.masterItemName,
+    item.category,
+    item.price,
+    item.quantity,
+    item.discount,
+    item.createdAt,
+  ]);
+  return item;
+}
+
+export async function deletePendingSavingsItem(id: string): Promise<boolean> {
+  if (MOCK_MODE) {
+    const index = mockPendingSavingsItems.findIndex((item) => item.id === id);
+    if (index === -1) return false;
+    mockPendingSavingsItems.splice(index, 1);
+    return true;
+  }
+
+  const rowNumber = await findRowNumber("PendingSavings!A2:A", id);
+  if (rowNumber === null) return false;
+  // Blanked, not removed — same reasoning as every other delete here.
+  await updateRange(`PendingSavings!A${rowNumber}:I${rowNumber}`, [
+    "", "", "", "", "", "", "", "", "",
+  ]);
+  return true;
+}
+
 export async function readMustPayItems(): Promise<MustPayItem[]> {
   if (MOCK_MODE) {
     return mockMustPayItems;
   }
-  const rows = await readRange("MustPay!A2:F");
+  // Column G (recurringGroupKey) postdates the original six columns, so a
+  // row written before it exists simply has nothing there — row[6] reads
+  // as undefined, same blank-means-null handling as PaidAt.
+  const rows = await readRange("MustPay!A2:G");
   return rows
     .filter((row) => row[0])
     .map((row) => ({
@@ -336,6 +453,7 @@ export async function readMustPayItems(): Promise<MustPayItem[]> {
       month: String(row[3]),
       status: row[4] === "paid" ? "paid" : "unpaid",
       paidAt: row[5] ? String(row[5]) : null,
+      recurringGroupKey: row[6] ? String(row[6]) : null,
     }));
 }
 
@@ -343,6 +461,7 @@ export async function appendMustPayItem(input: {
   name: string;
   amount: number;
   month: string;
+  recurringGroupKey?: string | null;
 }): Promise<MustPayItem> {
   const item: MustPayItem = {
     id: randomUUID(),
@@ -351,12 +470,21 @@ export async function appendMustPayItem(input: {
     month: input.month,
     status: "unpaid",
     paidAt: null,
+    recurringGroupKey: input.recurringGroupKey ?? null,
   };
   if (MOCK_MODE) {
     mockMustPayItems.push(item);
     return item;
   }
-  await appendRow("MustPay!A:F", [item.id, item.name, item.amount, item.month, item.status, ""]);
+  await appendRow("MustPay!A:G", [
+    item.id,
+    item.name,
+    item.amount,
+    item.month,
+    item.status,
+    "",
+    item.recurringGroupKey ?? "",
+  ]);
   return item;
 }
 
@@ -395,7 +523,100 @@ export async function deleteMustPayItem(id: string): Promise<boolean> {
   // Blanked, not removed, like every other delete here — readMustPayItems
   // skips rows with no ID, and leaving row numbers stable keeps concurrent
   // reads from landing on the wrong row.
-  await updateRange(`MustPay!A${rowNumber}:F${rowNumber}`, ["", "", "", "", "", ""]);
+  await updateRange(`MustPay!A${rowNumber}:G${rowNumber}`, ["", "", "", "", "", "", ""]);
+  return true;
+}
+
+// --- Recurring bills ----------------------------------------------------
+// Templates that generate a MustPay row for the current cycle the first
+// time it's asked for (see generateRecurringMustPay in routes/budget.ts).
+// A tab added after the original six/seven, so a Sheet that predates it
+// has no "RecurringBills" tab yet — readOptionalRange treats that as zero
+// rows instead of a 500, same as PendingSavings.
+
+export async function readRecurringBills(): Promise<RecurringBill[]> {
+  if (MOCK_MODE) {
+    return mockRecurringBills;
+  }
+  const rows = await readOptionalRange("RecurringBills!A2:F");
+  return rows
+    .filter((row) => row[0])
+    .map((row) => ({
+      id: String(row[0]),
+      name: String(row[1]),
+      amount: toNumber(row[2]),
+      cardGroup: row[3] ? String(row[3]) : null,
+      installmentsRemaining: toOptionalNumber(row[4]),
+      active: row[5] !== "false",
+    }));
+}
+
+export async function appendRecurringBill(input: {
+  name: string;
+  amount: number;
+  cardGroup?: string | null;
+  installmentsRemaining?: number | null;
+}): Promise<RecurringBill> {
+  const bill: RecurringBill = {
+    id: randomUUID(),
+    name: input.name,
+    amount: input.amount,
+    cardGroup: input.cardGroup ?? null,
+    installmentsRemaining: input.installmentsRemaining ?? null,
+    active: true,
+  };
+  if (MOCK_MODE) {
+    mockRecurringBills.push(bill);
+    return bill;
+  }
+  await appendRow("RecurringBills!A:F", [
+    bill.id,
+    bill.name,
+    bill.amount,
+    bill.cardGroup ?? "",
+    bill.installmentsRemaining ?? "",
+    "true",
+  ]);
+  return bill;
+}
+
+/** Applied after generating this cycle's row for a bill: counts its
+ *  instalment down, deactivating at zero so it stops generating on its
+ *  own — see the note on RecurringBill for why that matters. */
+export async function updateRecurringBill(
+  id: string,
+  updates: { installmentsRemaining?: number | null; active?: boolean },
+): Promise<RecurringBill | null> {
+  const existing = (await readRecurringBills()).find((bill) => bill.id === id);
+  if (!existing) return null;
+  const merged: RecurringBill = { ...existing, ...updates };
+
+  if (MOCK_MODE) {
+    const index = mockRecurringBills.findIndex((bill) => bill.id === id);
+    if (index !== -1) mockRecurringBills[index] = merged;
+    return merged;
+  }
+
+  const rowNumber = await findRowNumber("RecurringBills!A2:A", id);
+  if (rowNumber === null) return null;
+  await updateRange(`RecurringBills!E${rowNumber}:F${rowNumber}`, [
+    merged.installmentsRemaining ?? "",
+    String(merged.active),
+  ]);
+  return merged;
+}
+
+export async function deleteRecurringBill(id: string): Promise<boolean> {
+  if (MOCK_MODE) {
+    const index = mockRecurringBills.findIndex((bill) => bill.id === id);
+    if (index === -1) return false;
+    mockRecurringBills.splice(index, 1);
+    return true;
+  }
+
+  const rowNumber = await findRowNumber("RecurringBills!A2:A", id);
+  if (rowNumber === null) return false;
+  await updateRange(`RecurringBills!A${rowNumber}:F${rowNumber}`, ["", "", "", "", "", ""]);
   return true;
 }
 

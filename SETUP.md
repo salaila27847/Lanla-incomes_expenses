@@ -10,7 +10,7 @@ The same file has a `checkTrackerSheet` you can run afterwards: it reads nothing
 
 The rest of this section is the reference for what the script builds (or for doing it by hand).
 
-Create a new Google Sheet with six tabs, each with an exact header row in row 1:
+Create a new Google Sheet with eight tabs, each with an exact header row in row 1:
 
 **Tab `MasterItems`**
 | Name | Category | CreatedAt |
@@ -41,10 +41,34 @@ scanning still works and existing rows read fine, but rows can't be edited
 or deleted (`ID` identifies a row) and discounts aren't recorded.
 
 **Tab `MustPay`**
-| ID | Name | Amount | Month | Status | PaidAt |
-|----|------|--------|-------|--------|--------|
+| ID | Name | Amount | Month | Status | PaidAt | RecurringGroupKey |
+|----|------|--------|-------|--------|--------|-------------------|
 
-(`Month` is a pay-cycle key, `YYYY-MM`; `Status` is `unpaid` or `paid`.)
+(`Month` is a pay-cycle key, `YYYY-MM`; `Status` is `unpaid` or `paid`.
+`RecurringGroupKey` is set only on a row the app generated from a
+`RecurringBills` entry — blank for anything typed in by hand. Blank also
+reads correctly on rows written before this column existed.)
+
+⚠️ **If your Sheet already has this tab**, add the `RecurringGroupKey`
+column by hand — `setUpTrackerSheet` never touches a tab that already
+exists. Until you do, everything else on this tab works fine; only
+recurring-bill generation is affected (it would create a duplicate row
+each cycle instead of recognising the one it already made).
+
+**Tab `RecurringBills`**
+| ID | Name | Amount | CardGroup | InstallmentsRemaining | Active |
+|----|------|--------|-----------|------------------------|--------|
+
+A template, not a per-cycle row: the app creates one `MustPay` row from
+each active bill here the first time a new cycle is opened, tagging it
+with this row's `ID` (or `CardGroup`, if set) as `RecurringGroupKey` so it
+knows not to create a second one. `InstallmentsRemaining` blank means no
+end date (rent, utilities) — a number counts down by one each time it
+generates a row and the bill goes `Active` = `false` on its own at zero,
+the way an instalment plan actually ends. Several bills sharing the same
+`CardGroup` collapse into a single `MustPay` row each cycle, named for the
+card and summing their amounts — one card statement, not one transfer per
+thing on it.
 
 **Tab `Cycles`**
 | CycleKey | PaydayDate | SavingsBalance |
@@ -58,6 +82,18 @@ payday to the day before the next one, and is named for the month whose 15th
 falls inside it, so a payday on 26 Dec 2025 belongs to cycle `2026-01`. You
 can fill in the whole year at once from the app's แดชบอร์ด page; any month
 left blank is estimated from the nearest one you did enter.
+
+**Tab `PendingSavings`**
+| ID | Date | Store | MasterItemName | Category | Price | Quantity | Discount | CreatedAt |
+|----|------|-------|-----------------|----------|-------|----------|-----------|-----------|
+
+A line marked "paid from savings" on the receipt-review screen lands here
+instead of `PriceHistory` — it isn't a recorded expense yet. It moves to
+`PriceHistory` (same columns, same meaning) once the transfer-back QR is
+confirmed on the SavingsQR page, using this row's own `Date` rather than
+the confirmation date, so a purchase near the end of a pay cycle can't jump
+into the wrong one just because it was confirmed later. Confirming or
+cancelling it removes the row from here.
 
 **Tab `Income`**
 | ID | Date | Source | Amount |
@@ -98,4 +134,4 @@ SHEETS_SPREADSHEET_ID=<the ID from step 1>
 SHEETS_MOCK_MODE=false
 ```
 
-Restart the controller. All of `controller/src/sheets/client.ts` (master items, price history, must-pay, cycles, income, settings) now hits the real Sheet instead of the in-memory mock.
+Restart the controller. All of `controller/src/sheets/client.ts` (master items, price history, pending savings transfers, must-pay, recurring bills, cycles, income, settings) now hits the real Sheet instead of the in-memory mock.

@@ -491,3 +491,188 @@ describe("discounts", () => {
     expect(body.spentThisCycle.food).toBe(29);
   });
 });
+
+/**
+ * MustPay originally had no automatic regeneration at all (per SPEC.md's
+ * implementation notes) — every bill was re-typed each cycle. RecurringBill
+ * is the walk-back of that: GET /budget generates the current cycle's row
+ * from each active template the first time it's asked for, and never
+ * again, so repeated page loads can't duplicate it.
+ */
+describe("recurring bills — generation on GET /budget", () => {
+  it("generates a MustPay row for an active recurring bill", async () => {
+    const { app, sheets } = await buildApp();
+    await sheets.appendRecurringBill({ name: "ค่าเน็ต", amount: 590 });
+
+    const { body } = await request(app).get("/budget");
+
+    expect(body.mustPay).toMatchObject([{ name: "ค่าเน็ต", amount: 590, status: "unpaid" }]);
+    expect(body.mustPay[0].recurringGroupKey).toBeTruthy();
+  });
+
+  it("does not duplicate the row on a second GET", async () => {
+    const { app, sheets } = await buildApp();
+    await sheets.appendRecurringBill({ name: "ค่าเน็ต", amount: 590 });
+
+    await request(app).get("/budget");
+    await request(app).get("/budget");
+
+    const rows = (await sheets.readMustPayItems()).filter((item) => item.month === THIS_CYCLE);
+    expect(rows).toHaveLength(1);
+  });
+
+  it("sums several bills sharing a cardGroup into one row named for the card", async () => {
+    const { app, sheets } = await buildApp();
+    await sheets.appendRecurringBill({
+      name: "ผ่อนโทรศัพท์",
+      amount: 1200,
+      cardGroup: "บัตรเครดิต KTC",
+      installmentsRemaining: 10,
+    });
+    await sheets.appendRecurringBill({
+      name: "ผ่อนตู้เย็น",
+      amount: 800,
+      cardGroup: "บัตรเครดิต KTC",
+      installmentsRemaining: 6,
+    });
+
+    const { body } = await request(app).get("/budget");
+
+    expect(body.mustPay).toMatchObject([{ name: "บัตรเครดิต KTC", amount: 2000 }]);
+  });
+
+  it("leaves a bill with no installment count recurring forever", async () => {
+    const { app, sheets } = await buildApp();
+    const bill = await sheets.appendRecurringBill({ name: "ค่าเช่า", amount: 4000 });
+
+    await request(app).get("/budget");
+
+    const [updated] = await sheets.readRecurringBills();
+    expect(updated).toMatchObject({ id: bill.id, installmentsRemaining: null, active: true });
+  });
+
+  it("counts an instalment plan down and deactivates it at zero", async () => {
+    const { app, sheets } = await buildApp();
+    const bill = await sheets.appendRecurringBill({
+      name: "ผ่อนโทรศัพท์",
+      amount: 1200,
+      installmentsRemaining: 1,
+    });
+
+    await request(app).get("/budget");
+
+    const [updated] = await sheets.readRecurringBills();
+    expect(updated).toMatchObject({ id: bill.id, installmentsRemaining: 0, active: false });
+  });
+
+  it("stops offering an exhausted bill without touching the row it already generated", async () => {
+    const { app, sheets } = await buildApp();
+    await sheets.appendRecurringBill({
+      name: "ผ่อนโทรศัพท์",
+      amount: 1200,
+      installmentsRemaining: 1,
+    });
+
+    const first = await request(app).get("/budget");
+    expect(first.body.recurringBills).toHaveLength(0); // generated + immediately exhausted
+    expect(first.body.mustPay).toMatchObject([{ name: "ผ่อนโทรศัพท์", amount: 1200 }]);
+
+    const second = await request(app).get("/budget");
+    expect(second.body.mustPay).toHaveLength(1); // still not duplicated
+  });
+
+  it("only lists active bills in the recurringBills field", async () => {
+    const { app, sheets } = await buildApp();
+    const ongoing = await sheets.appendRecurringBill({ name: "ค่าเน็ต", amount: 590 });
+    await sheets.updateRecurringBill(ongoing.id, { active: false });
+    await sheets.appendRecurringBill({ name: "ค่าไฟ", amount: 800 });
+
+    const { body } = await request(app).get("/budget");
+
+    expect(body.recurringBills).toMatchObject([{ name: "ค่าไฟ" }]);
+  });
+});
+
+describe("POST /budget/recurring", () => {
+  it("creates a recurring bill", async () => {
+    const { app } = await buildApp();
+
+    const response = await request(app)
+      .post("/budget/recurring")
+      .send({ name: "ผ่อนโทรศัพท์", amount: 1200, installments: 10, cardGroup: "บัตรเครดิต KTC" });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toMatchObject({
+      name: "ผ่อนโทรศัพท์",
+      amount: 1200,
+      installmentsRemaining: 10,
+      cardGroup: "บัตรเครดิต KTC",
+      active: true,
+    });
+  });
+
+  it("defaults installments and cardGroup to none", async () => {
+    const { app } = await buildApp();
+
+    const response = await request(app).post("/budget/recurring").send({ name: "ค่าเน็ต", amount: 590 });
+
+    expect(response.body).toMatchObject({ installmentsRemaining: null, cardGroup: null });
+  });
+
+  it.each([
+    ["a missing name", { amount: 500 }],
+    ["a zero amount", { name: "ค่าเน็ต", amount: 0 }],
+    ["a fractional installment count", { name: "ค่าเน็ต", amount: 500, installments: 2.5 }],
+    ["a zero installment count", { name: "ค่าเน็ต", amount: 500, installments: 0 }],
+  ])("rejects %s", async (_label, payload) => {
+    const { app } = await buildApp();
+
+    const response = await request(app).post("/budget/recurring").send(payload);
+
+    expect(response.status).toBe(400);
+  });
+});
+
+describe("POST /budget/recurring/:id/stop", () => {
+  it("deactivates the bill without touching a row already generated", async () => {
+    const { app, sheets } = await buildApp();
+    const bill = await sheets.appendRecurringBill({ name: "ค่าเน็ต", amount: 590 });
+    await request(app).get("/budget"); // generates this cycle's row
+
+    const response = await request(app).post(`/budget/recurring/${bill.id}/stop`);
+
+    expect(response.status).toBe(200);
+    const [updated] = await sheets.readRecurringBills();
+    expect(updated.active).toBe(false);
+    const rows = (await sheets.readMustPayItems()).filter((item) => item.month === THIS_CYCLE);
+    expect(rows).toMatchObject([{ name: "ค่าเน็ต", amount: 590 }]);
+  });
+
+  it("404s for an id that doesn't exist", async () => {
+    const { app } = await buildApp();
+
+    const response = await request(app).post("/budget/recurring/does-not-exist/stop");
+
+    expect(response.status).toBe(404);
+  });
+});
+
+describe("DELETE /budget/recurring/:id", () => {
+  it("removes a mistakenly added bill", async () => {
+    const { app, sheets } = await buildApp();
+    const bill = await sheets.appendRecurringBill({ name: "ค่าเน็ต", amount: 590 });
+
+    const response = await request(app).delete(`/budget/recurring/${bill.id}`);
+
+    expect(response.status).toBe(200);
+    expect(await sheets.readRecurringBills()).toHaveLength(0);
+  });
+
+  it("404s for an id that doesn't exist", async () => {
+    const { app } = await buildApp();
+
+    const response = await request(app).delete("/budget/recurring/does-not-exist");
+
+    expect(response.status).toBe(404);
+  });
+});

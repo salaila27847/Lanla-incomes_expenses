@@ -1,7 +1,7 @@
 /**
  * One-time setup for the Smart Expense & Price Tracker's Google Sheet.
  *
- * Creates any of the six tabs the controller expects that don't exist yet,
+ * Creates any of the eight tabs the controller expects that don't exist yet,
  * with the exact header row and column formats it reads back.
  *
  * How to run it:
@@ -45,9 +45,32 @@ var TABS = [
     textColumns: [1, 7], // Date, ID
   },
   {
+    // A line paid straight from the savings account isn't a recorded
+    // expense yet -- it sits here until the transfer-back QR is confirmed
+    // on the SavingsQR page, at which point it moves to PriceHistory using
+    // this row's own Date (not the confirmation date).
+    name: 'PendingSavings',
+    headers: [
+      'ID', 'Date', 'Store', 'MasterItemName', 'Category', 'Price', 'Quantity', 'Discount', 'CreatedAt',
+    ],
+    textColumns: [1, 2, 9], // ID, Date, CreatedAt
+  },
+  {
     name: 'MustPay',
-    headers: ['ID', 'Name', 'Amount', 'Month', 'Status', 'PaidAt'],
+    // RecurringGroupKey is set only on a row generated from a
+    // RecurringBills entry -- blank for anything typed in by hand.
+    headers: ['ID', 'Name', 'Amount', 'Month', 'Status', 'PaidAt', 'RecurringGroupKey'],
     textColumns: [4], // Month: a pay-cycle key, YYYY-MM
+  },
+  {
+    // A template, not a per-cycle row: the app creates one MustPay row per
+    // active bill here the first time a new cycle is opened. Blank
+    // InstallmentsRemaining means no end date; a number counts down and
+    // the bill goes inactive at zero. Bills sharing a CardGroup collapse
+    // into a single MustPay row each cycle, summing their amounts.
+    name: 'RecurringBills',
+    headers: ['ID', 'Name', 'Amount', 'CardGroup', 'InstallmentsRemaining', 'Active'],
+    textColumns: [],
   },
   {
     name: 'Cycles',
@@ -144,6 +167,7 @@ function checkTrackerSheet() {
     { tab: 'Cycles', column: 1, label: 'CycleKey', regex: /^\d{4}-\d{2}$/, want: 'YYYY-MM' },
     { tab: 'Cycles', column: 2, label: 'PaydayDate', regex: /^\d{4}-\d{2}-\d{2}$/, want: 'YYYY-MM-DD' },
     { tab: 'Income', column: 2, label: 'Date', regex: /^\d{4}-\d{2}-\d{2}$/, want: 'YYYY-MM-DD' },
+    { tab: 'PendingSavings', column: 2, label: 'Date', regex: /^\d{4}-\d{2}-\d{2}$/, want: 'YYYY-MM-DD' },
   ];
   var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   var problems = [];
@@ -190,7 +214,7 @@ function checkTrackerSheet() {
 
   var summary = problems.length
     ? 'Found ' + problems.length + ' thing(s) to fix:\n\n- ' + problems.join('\n- ')
-    : 'All six tabs are present and every dated column reads back in the format the app expects.';
+    : 'All eight tabs are present and every dated column reads back in the format the app expects.';
 
   Logger.log(summary);
   SpreadsheetApp.getUi().alert(summary);

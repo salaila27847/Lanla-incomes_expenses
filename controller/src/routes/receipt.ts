@@ -3,6 +3,7 @@ import multer from "multer";
 import { env } from "../env";
 import {
   appendMasterItem,
+  appendPendingSavingsItem,
   appendPriceHistoryRow,
   readMasterItems,
   type ItemCategory,
@@ -157,6 +158,11 @@ interface ConfirmedItem {
   discount?: number;
   master_item_name: string;
   category: ItemCategory;
+  /** Which account the money actually came out of. Defaults to "spending"
+   *  so every caller that predates this field keeps behaving exactly as
+   *  before. A "savings" line isn't a recorded expense yet — see the note
+   *  on PendingSavingsItem in sheets/client.ts. */
+  paid_from?: "spending" | "savings";
 }
 
 interface ConfirmRequestBody {
@@ -185,6 +191,8 @@ receiptRouter.post("/confirm", async (req, res) => {
 
   const existingNames = new Set((await readMasterItems()).map((mi) => mi.name));
   let newMasterItems = 0;
+  let priceHistoryRowsWritten = 0;
+  let pendingSavingsRowsWritten = 0;
   const date = purchased_at ?? new Date().toISOString().slice(0, 10);
 
   for (const item of items) {
@@ -193,7 +201,7 @@ receiptRouter.post("/confirm", async (req, res) => {
       existingNames.add(item.master_item_name);
       newMasterItems += 1;
     }
-    await appendPriceHistoryRow({
+    const row = {
       date,
       store: store ?? null,
       masterItemName: item.master_item_name,
@@ -201,12 +209,22 @@ receiptRouter.post("/confirm", async (req, res) => {
       price: item.price,
       quantity: item.quantity ?? 1,
       discount: item.discount ?? 0,
-    });
+    };
+    if (item.paid_from === "savings") {
+      // Held here, not written as an expense, until the transfer-back QR
+      // is confirmed on the SavingsQR page — see PendingSavingsItem.
+      await appendPendingSavingsItem(row);
+      pendingSavingsRowsWritten += 1;
+    } else {
+      await appendPriceHistoryRow(row);
+      priceHistoryRowsWritten += 1;
+    }
   }
 
   res.json({
     success: true,
     new_master_items_added: newMasterItems,
-    price_history_rows_written: items.length,
+    price_history_rows_written: priceHistoryRowsWritten,
+    pending_savings_rows_written: pendingSavingsRowsWritten,
   });
 });

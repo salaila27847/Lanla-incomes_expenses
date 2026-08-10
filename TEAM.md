@@ -97,3 +97,73 @@ model: sonnet
 ```
 
 โครงสร้างนี้ตั้งใจให้เล็กพอที่จะดูแลง่าย แต่ครอบคลุมทุกขอบเขตของ repo — ขยาย role เพิ่มได้เมื่อโปรเจกต์โตขึ้นจริง (เช่น แยก DevOps/Deploy role เมื่อเริ่มมี Vercel deployment ที่ซับซ้อนขึ้น) แต่ไม่ควรตั้งไว้ตั้งแต่ต้นเพราะจะเพิ่ม coordination overhead โดยยังไม่มีงานมารองรับ
+
+## ตัวอย่างการใช้งานจริง: เพิ่มปุ่ม "Export CSV" ในหน้า Price History
+
+โจทย์สมมติ (ขนาดเล็ก เกิดขึ้นจริงได้): "ผู้ใช้อยากกดปุ่มแล้วโหลดผลค้นหาใน Price History เป็นไฟล์ CSV ไปเปิดใน Excel เอง" ฟีเจอร์นี้แตะ `controller` (route ใหม่) และ `frontend` (ปุ่ม+ดาวน์โหลด) เท่านั้น — ไม่ต้องแตะ `backend` (Python) เพราะไม่เกี่ยวกับ OCR/matching/QR เลย นี่คือจุดที่การแบ่งทีมตาม service บอกได้ทันทีว่า **ไม่ต้องเรียก Platform Engineer ไปอ่าน `/backend` เลยด้วยซ้ำ** — ประหยัดโทเค็นตั้งแต่ขั้นวางแผน
+
+### ขั้นที่ 1 — Orchestrator แตกงาน
+
+Orchestrator อ่านโจทย์ เปิดดู `controller/src/routes/prices.ts` (มี logic กรอง/จัดกลุ่มอยู่แล้วใน `GET /`) และ `frontend/src/pages/PriceHistory.tsx` (มี state `groups`/`query` อยู่แล้ว) แล้วเขียน "สัญญา" สั้น ๆ ให้แต่ละ role แทนที่จะให้แต่ละ role ไปสำรวจเองทั้ง repo:
+
+> **API contract:** `GET /prices/export?item=<คำค้น>` → คืน `text/csv` คอลัมน์ `store,masterItemName,price,quantity,discount,netPrice,date` โดยใช้ logic กรอง/จัดกลุ่มเดียวกับ `GET /prices` (ห้าม duplicate) — แถวที่ `isDiscountOnly` เป็น true ต้องถูกกรองออกเหมือนกัน
+
+จากนั้นมอบงานสองก้อนแบบขนาน:
+
+```
+Agent({
+  description: "Add CSV export route",
+  subagent_type: "platform-engineer",
+  prompt: "เพิ่ม GET /prices/export?item=... ใน controller/src/routes/prices.ts
+    ให้ reuse filter/group logic เดิมจาก GET / (แยกเป็นฟังก์ชันร่วมถ้าจำเป็น
+    อย่าคัดลอกเงื่อนไข isDiscountOnly ซ้ำ) ตอบกลับเป็น text/csv, header:
+    store,masterItemName,price,quantity,discount,netPrice,date
+    เขียน supertest ใน prices.test.ts คู่กับ route เดิม"
+})
+
+Agent({
+  description: "Add CSV export button to PriceHistory",
+  subagent_type: "frontend-engineer",
+  prompt: "ในหน้า frontend/src/pages/PriceHistory.tsx เพิ่มปุ่ม 'Export CSV'
+    ข้าง search box, disabled เมื่อ groups เป็น null/ว่าง, กดแล้ว fetch
+    `${API_BASE_URL}/prices/export?item=...` แล้ว trigger browser download
+    (ไม่ต้องใช้ library เพิ่ม ใช้ Blob + URL.createObjectURL พอ)"
+})
+```
+
+สังเกตว่า prompt ทั้งสองก้อนสั้น เพราะแต่ละ subagent มี `description` ที่ตั้ง scope ไว้ล่วงหน้าอยู่แล้ว (ไม่ต้องอธิบายทั้งโปรเจกต์ซ้ำทุกครั้ง) — นี่คือส่วนที่ประหยัดโทเค็นจริง ๆ เทียบกับการเปิด agent ทั่วไปแล้วต้องบรีฟทั้ง repo ใหม่ทุกครั้ง
+
+### ขั้นที่ 2 — สองงานรันขนาน ไม่ชนกัน
+
+Platform Engineer แก้เฉพาะ `controller/src/routes/prices.ts` + `controller/src/routes/prices.test.ts`; Frontend Engineer แก้เฉพาะ `frontend/src/pages/PriceHistory.tsx` — คนละไฟล์คนละ service จึงไม่ต้องรอกันหรือใช้ `isolation: worktree` เลยด้วยซ้ำ (เก็บ worktree ไว้ใช้เฉพาะตอนสอง role มีโอกาสแก้ไฟล์เดียวกันจริง ๆ) ระหว่างทาง Platform Engineer พบว่า logic กรอง/จัดกลุ่มใน `GET /` เขียนแบบ inline ในตัว handler จึงต้องแตกเป็นฟังก์ชัน `buildPriceGroups()` ก่อนแล้วให้ทั้งสอง route เรียกใช้ร่วมกัน — เป็นการตัดสินใจระดับไฟล์เดียวที่ role นี้ทำเองได้โดยไม่ต้องถาม Orchestrator
+
+### ขั้นที่ 3 — QA
+
+QA Engineer ไม่ต้องรัน `pytest` ของ `/backend` เลย (ไม่มีไฟล์ backend เปลี่ยน) รันแค่:
+```
+cd controller && npm test   # ครอบทั้ง route เดิมและ route ใหม่
+cd frontend && npm test     # ครอบ pure helper ที่ไม่แตะ (regression check เร็ว ๆ)
+```
+นี่คือจุดที่ "รู้ scope ของ diff" ช่วยตัดงานที่ไม่จำเป็นออกไปได้ทั้งก้อน (suite ของ backend) แทนที่จะรันทั้ง 3 suite ทุกครั้งแบบไม่คิด
+
+### ขั้นที่ 4 — Reviewer
+
+เรียก skill `code-review` กับ diff รวมของทั้งสองไฟล์ ประเด็นที่ควรเจอในตัวอย่างนี้:
+- CSV injection: ถ้า `masterItemName` ขึ้นต้นด้วย `=`/`+`/`-`/`@` แล้วเปิดใน Excel อาจถูกตีความเป็นสูตร — reviewer ควรทักถ้า Platform Engineer ไม่ได้ escape
+- ยืนยันว่า route ใหม่ reuse `buildPriceGroups()` จริง ไม่ได้ copy เงื่อนไข `isDiscountOnly` ซ้ำ (ตรงตาม contract ที่ Orchestrator ตั้งไว้)
+- ไม่มี secret/credential หลุดในทั้งสองไฟล์
+
+### ขั้นที่ 5 — Orchestrator merge
+
+เพราะฟีเจอร์นี้เป็นแค่ "อ่านข้อมูลเดิมแล้วส่งออก" ไม่ได้เปลี่ยนกติกาโดเมนใด ๆ (unit price/discount/pay cycle ยังเหมือนเดิมทุกอย่าง) จึง **ไม่ต้องแก้ `CLAUDE.md`/`SPEC.md`** — Orchestrator merge ตรง ๆ ได้เลย นี่คือตัวอย่างของการ "ไม่ทำงานเกินคำขอ" ที่ทีมนี้ควรยึดไว้เสมอ
+
+### เทียบโทเค็นคร่าว ๆ กับแบบไม่มีทีม
+
+| | Agent เดียวไม่มี scope | ทีม 5 role ตามข้างบน |
+|---|---|---|
+| ต้องอ่านอะไรก่อนเริ่ม | สำรวจทั้ง repo (frontend+controller+backend) เพื่อหาว่าไฟล์ไหนเกี่ยวข้อง | Orchestrator ชี้ไฟล์ที่เกี่ยวมาให้ตรง ๆ 2 ไฟล์หลัก |
+| context ที่ต้องบรีฟ | อธิบายทั้งโปรเจกต์ใหม่ทุกครั้งที่เริ่ม session | ไม่ต้อง — อยู่ใน `description` ของ subagent อยู่แล้ว |
+| test suite ที่รัน | มักรันทั้ง 3 suite เพราะไม่แน่ใจว่ากระทบอะไรบ้าง | รันแค่ 2 suite ที่ diff แตะจริง |
+| งานขนานได้ไหม | ทำทีละอย่างในบทสนทนาเดียว | frontend/controller ทำพร้อมกันได้ |
+
+ตัวเลขในตารางเป็นทิศทางเชิงคุณภาพเพื่อให้เห็นภาพ ไม่ใช่การวัดจริง — แต่รูปแบบนี้ (จำกัด scope ตั้งแต่ต้น, รู้ล่วงหน้าว่าตัดอะไรออกได้) คือกลไกจริงที่ทำให้ประหยัดโทเค็น ไม่ใช่แค่ "มีหลาย agent" เฉย ๆ

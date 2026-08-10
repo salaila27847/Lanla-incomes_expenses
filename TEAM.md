@@ -65,36 +65,20 @@ Repo นี้เป็น monorepo 3 service ที่ **ไม่มี build 
 - เขียน description ของแต่ละ subagent ให้แคบและชัดเจน เพื่อไม่ต้องอธิบาย context ซ้ำทุกครั้งที่เรียกใช้
 - Reuse skill ที่มีอยู่แล้วในระบบแทนสั่งงานแบบ ad-hoc ทุกครั้ง
 
-## ตัวอย่าง subagent config (`.claude/agents/*.md`)
+## Subagent config ที่ใช้งานได้จริงแล้ว
 
-ถ้าต้องการนำไปใช้จริงใน Claude Code ให้สร้างไฟล์ตาม role ข้างต้น เช่น:
+Role ที่ต้องการ system prompt เฉพาะตัวถูกสร้างเป็นไฟล์จริงไว้แล้วที่ `.claude/agents/`:
 
-```markdown
----
-name: frontend-engineer
-description: React/TypeScript/Vite/Tailwind work scoped to /frontend — ReceiptReview, PriceHistory, Budget, Dashboard, SavingsQR pages, PWA config, and frontend vitest suite. Use for any change confined to the frontend service.
-tools: Read, Edit, Write, Glob, Grep, Bash
-model: sonnet
----
-```
+- [`frontend-engineer.md`](.claude/agents/frontend-engineer.md)
+- [`platform-engineer.md`](.claude/agents/platform-engineer.md)
+- [`qa-engineer.md`](.claude/agents/qa-engineer.md)
 
-```markdown
----
-name: platform-engineer
-description: Node/Express/TypeScript (controller, Google Sheets) and Python/FastAPI (backend, OCR/matching/QR) work scoped to /controller and /backend. Use for changes touching Sheets tabs, pay-cycle logic, price/discount semantics, master-item matching, or PromptPay QR.
-tools: Read, Edit, Write, Glob, Grep, Bash
-model: sonnet
----
-```
+อีกสอง role ในตารางข้างบนไม่ต้องมีไฟล์แยก เพราะไม่ใช่ "งานที่ spawn ออกไป":
 
-```markdown
----
-name: qa-engineer
-description: Runs and writes tests across all three services (pytest, vitest+supertest, vitest). Use after any code change and before commit; knows the project's offline mocking conventions (OCR_MOCK_MODE, SHEETS_MOCK_MODE, httpx.MockTransport) and fake-time testing rules.
-tools: Read, Edit, Bash, Glob, Grep
-model: sonnet
----
-```
+- **Orchestrator** คือ session หลักที่คุยกับผู้ใช้อยู่แล้ว — ไม่ใช่ subagent ที่ต้องมี config เพิ่ม
+- **Reviewer** คือการเรียก skill ที่มีอยู่แล้วตรง ๆ (`/code-review`, `/security-review`) ก่อน merge ไม่ต้องสร้าง subagent ใหม่มาทำงานซ้ำกับ skill เดิม
+
+เมื่อมีงานที่ scope ตรงกับ role ใดชัดเจน ให้เรียกผ่าน Agent tool โดยระบุ `subagent_type` เป็นชื่อไฟล์ (เช่น `subagent_type: "frontend-engineer"`) — Claude Code จะโหลด system prompt จากไฟล์นั้นให้อัตโนมัติ ไม่ต้องบรีฟ context ใหม่ทุกครั้ง
 
 โครงสร้างนี้ตั้งใจให้เล็กพอที่จะดูแลง่าย แต่ครอบคลุมทุกขอบเขตของ repo — ขยาย role เพิ่มได้เมื่อโปรเจกต์โตขึ้นจริง (เช่น แยก DevOps/Deploy role เมื่อเริ่มมี Vercel deployment ที่ซับซ้อนขึ้น) แต่ไม่ควรตั้งไว้ตั้งแต่ต้นเพราะจะเพิ่ม coordination overhead โดยยังไม่มีงานมารองรับ
 

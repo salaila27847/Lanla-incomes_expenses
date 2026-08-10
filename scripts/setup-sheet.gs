@@ -1,7 +1,7 @@
 /**
  * One-time setup for the Smart Expense & Price Tracker's Google Sheet.
  *
- * Creates any of the seven tabs the controller expects that don't exist yet,
+ * Creates any of the eight tabs the controller expects that don't exist yet,
  * with the exact header row and column formats it reads back.
  *
  * How to run it:
@@ -57,8 +57,20 @@ var TABS = [
   },
   {
     name: 'MustPay',
-    headers: ['ID', 'Name', 'Amount', 'Month', 'Status', 'PaidAt'],
+    // RecurringGroupKey is set only on a row generated from a
+    // RecurringBills entry -- blank for anything typed in by hand.
+    headers: ['ID', 'Name', 'Amount', 'Month', 'Status', 'PaidAt', 'RecurringGroupKey'],
     textColumns: [4], // Month: a pay-cycle key, YYYY-MM
+  },
+  {
+    // A template, not a per-cycle row: the app creates one MustPay row per
+    // active bill here the first time a new cycle is opened. Blank
+    // InstallmentsRemaining means no end date; a number counts down and
+    // the bill goes inactive at zero. Bills sharing a CardGroup collapse
+    // into a single MustPay row each cycle, summing their amounts.
+    name: 'RecurringBills',
+    headers: ['ID', 'Name', 'Amount', 'CardGroup', 'InstallmentsRemaining', 'Active'],
+    textColumns: [],
   },
   {
     name: 'Cycles',
@@ -202,7 +214,7 @@ function checkTrackerSheet() {
 
   var summary = problems.length
     ? 'Found ' + problems.length + ' thing(s) to fix:\n\n- ' + problems.join('\n- ')
-    : 'All seven tabs are present and every dated column reads back in the format the app expects.';
+    : 'All eight tabs are present and every dated column reads back in the format the app expects.';
 
   Logger.log(summary);
   SpreadsheetApp.getUi().alert(summary);

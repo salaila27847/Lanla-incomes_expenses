@@ -1,7 +1,7 @@
 /**
  * One-time setup for the Smart Expense & Price Tracker's Google Sheet.
  *
- * Creates any of the eight tabs the controller expects that don't exist yet,
+ * Creates any of the nine tabs the controller expects that don't exist yet,
  * with the exact header row and column formats it reads back.
  *
  * How to run it:
@@ -76,6 +76,15 @@ var TABS = [
     name: 'Cycles',
     headers: ['CycleKey', 'PaydayDate', 'SavingsBalance'],
     textColumns: [1, 2], // CycleKey, PaydayDate
+  },
+  {
+    // Maps a transfer slip's registered payee name to the store name the
+    // app actually records -- written automatically the first time a
+    // slip-scanned receipt for that payee is confirmed, and read back to
+    // prefill the store field next time. Nothing to fill in by hand.
+    name: 'SlipPayees',
+    headers: ['PayeeName', 'StoreName'],
+    textColumns: [],
   },
   {
     name: 'Income',
@@ -214,7 +223,7 @@ function checkTrackerSheet() {
 
   var summary = problems.length
     ? 'Found ' + problems.length + ' thing(s) to fix:\n\n- ' + problems.join('\n- ')
-    : 'All eight tabs are present and every dated column reads back in the format the app expects.';
+    : 'All nine tabs are present and every dated column reads back in the format the app expects.';
 
   Logger.log(summary);
   SpreadsheetApp.getUi().alert(summary);

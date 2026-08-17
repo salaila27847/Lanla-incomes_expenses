@@ -793,3 +793,69 @@ describe("discounts", () => {
     });
   });
 });
+
+describe("slip payees", () => {
+  it("starts with no mapping for a payee never seen before", async () => {
+    const client = await loadClient();
+
+    expect(await client.findStoreForPayee("ร้านทดสอบ")).toBeNull();
+  });
+
+  it("remembers a mapping and reads it back", async () => {
+    const client = await loadClient();
+
+    await client.upsertSlipPayeeMapping("ร้านถุงเงิน (นายเบิร์ด)", "ร้านลุงเบิร์ด");
+
+    expect(await client.findStoreForPayee("ร้านถุงเงิน (นายเบิร์ด)")).toBe("ร้านลุงเบิร์ด");
+    expect(await client.readSlipPayeeMap()).toEqual([
+      { payee: "ร้านถุงเงิน (นายเบิร์ด)", storeName: "ร้านลุงเบิร์ด" },
+    ]);
+  });
+
+  it("matches on the trimmed payee text", async () => {
+    const client = await loadClient();
+
+    await client.upsertSlipPayeeMapping("ร้านลุงเบิร์ด", "ร้านลุงเบิร์ด");
+
+    expect(await client.findStoreForPayee("  ร้านลุงเบิร์ด  ")).toBe("ร้านลุงเบิร์ด");
+  });
+
+  it("overwrites rather than duplicating when the same payee maps to a new store", async () => {
+    const client = await loadClient();
+
+    await client.upsertSlipPayeeMapping("ร้านถุงเงิน (นายเบิร์ด)", "ร้านเก่า");
+    await client.upsertSlipPayeeMapping("ร้านถุงเงิน (นายเบิร์ด)", "ร้านใหม่");
+
+    expect(await client.readSlipPayeeMap()).toEqual([
+      { payee: "ร้านถุงเงิน (นายเบิร์ด)", storeName: "ร้านใหม่" },
+    ]);
+  });
+
+  it("does nothing for a blank payee or a blank store name", async () => {
+    const client = await loadClient();
+
+    await client.upsertSlipPayeeMapping("", "ร้านลุงเบิร์ด");
+    await client.upsertSlipPayeeMapping("ร้านถุงเงิน", "   ");
+
+    expect(await client.readSlipPayeeMap()).toEqual([]);
+  });
+
+  it("treats a Sheet with no SlipPayees tab yet as no mappings", async () => {
+    // A tab added after the original eight -- readOptionalRange must not
+    // turn a Sheet that predates it into a 500, same as PendingSavings.
+    const { google } = await import("googleapis");
+    vi.spyOn(google, "sheets").mockReturnValue({
+      spreadsheets: {
+        values: {
+          get: async () => {
+            throw new Error("Unable to parse range: SlipPayees!A2:B");
+          },
+        },
+      },
+    } as any);
+    const client = await loadClient({ SHEETS_MOCK_MODE: "false", SHEETS_SPREADSHEET_ID: "sheet-123" });
+
+    expect(await client.readSlipPayeeMap()).toEqual([]);
+    expect(await client.findStoreForPayee("ร้านถุงเงิน")).toBeNull();
+  });
+});

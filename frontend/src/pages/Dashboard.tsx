@@ -73,6 +73,21 @@ function shortDate(iso: string): string {
   return `${day} ${THAI_MONTHS[month - 1]}`;
 }
 
+function addDays(iso: string, delta: number): string {
+  const [year, month, day] = iso.split("-").map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day + delta));
+  return `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())}`;
+}
+
+/** Whole days from today to `iso` (negative once the date is in the past). */
+function daysUntil(iso: string): number {
+  const now = new Date();
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const [year, month, day] = iso.split("-").map(Number);
+  const target = Date.UTC(year, month - 1, day);
+  return Math.round((target - today) / 86_400_000);
+}
+
 function money(value: number): string {
   return value.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
@@ -268,9 +283,13 @@ function CurrentCycleCards({ data, cycleKey }: { data: DashboardResponse; cycleK
       <Card label="รายจ่ายคงที่ / บิล" value={money(fixed ?? 0)} className="text-red-400" />
       <Card
         label="ค่ากิน + ของใช้"
-        value={`${money(food + goods)}`}
-        hint={`งบ ${money(data.budget.food + data.budget.goods)} ต่อรอบ`}
-        className={food + goods > data.budget.food + data.budget.goods ? "text-red-400" : "text-sky-400"}
+        value={`คงเหลือ งบของกิน: ${signed(data.budget.food - food)} / งบของใช้: ${signed(
+          data.budget.goods - goods,
+        )}`}
+        hint={cycle ? `คงเหลืออีก ${daysUntil(addDays(cycle.end, 1))} วัน` : undefined}
+        className={
+          data.budget.food - food < 0 || data.budget.goods - goods < 0 ? "text-red-400" : "text-sky-400"
+        }
       />
       <Card
         label="ยอดบัญชีใช้จ่าย (คำนวณ)"

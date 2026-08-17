@@ -23,10 +23,11 @@ async function buildApp() {
   return { app, sheets };
 }
 
-/** Stub the Python backend's /ocr and /match endpoints. */
+/** Stub the Python backend's /ocr, /ocr/slip and /match endpoints. */
 function stubBackend(options: {
   ocr?: { status?: number; body?: unknown };
   match?: (rawText: string) => { status?: number; body?: unknown };
+  slip?: { status?: number; body?: unknown };
 }) {
   const calls: { url: string; body?: unknown }[] = [];
 
@@ -34,6 +35,14 @@ function stubBackend(options: {
     "fetch",
     vi.fn(async (url: string, init: RequestInit = {}) => {
       const target = String(url);
+      if (target.endsWith("/ocr/slip")) {
+        calls.push({ url: target });
+        const {
+          status = 200,
+          body = { payee: null, purchased_at: null, amount: 0, transaction_id: null },
+        } = options.slip ?? {};
+        return new Response(JSON.stringify(body), { status });
+      }
       if (target.endsWith("/ocr/")) {
         calls.push({ url: target });
         const { status = 200, body = { store: null, purchased_at: null, items: [] } } =
@@ -163,6 +172,76 @@ describe("POST /receipt/scan", () => {
 
     expect(body.items).toHaveLength(2);
     expect(body.items[0]).toMatchObject({ matched: false, score: 0 });
+  });
+});
+
+describe("POST /receipt/scan-slip", () => {
+  it("requires an image", async () => {
+    const { app } = await buildApp();
+    stubBackend({});
+
+    const response = await request(app).post("/receipt/scan-slip");
+
+    expect(response.status).toBe(400);
+  });
+
+  it("returns the slip's own fields with no suggested store for a payee never seen before", async () => {
+    const { app } = await buildApp();
+    stubBackend({
+      slip: {
+        body: {
+          payee: "ร้านถุงเงิน (แซ่บเล้ง แอนด์ หม่าล่านายเบิร์ด)",
+          purchased_at: "2026-08-17",
+          amount: 55,
+          transaction_id: "0462295o93a70vtnAtxx",
+        },
+      },
+    });
+
+    const response = await request(app)
+      .post("/receipt/scan-slip")
+      .attach("image", Buffer.from("jpeg"), "slip.jpg");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      payee: "ร้านถุงเงิน (แซ่บเล้ง แอนด์ หม่าล่านายเบิร์ด)",
+      purchased_at: "2026-08-17",
+      amount: 55,
+      transaction_id: "0462295o93a70vtnAtxx",
+      suggested_store: null,
+    });
+  });
+
+  it("suggests the store a payee was mapped to on an earlier confirm", async () => {
+    const { app, sheets } = await buildApp();
+    await sheets.upsertSlipPayeeMapping("ร้านถุงเงิน (นายเบิร์ด)", "ร้านลุงเบิร์ด");
+    stubBackend({
+      slip: {
+        body: {
+          payee: "ร้านถุงเงิน (นายเบิร์ด)",
+          purchased_at: "2026-08-17",
+          amount: 55,
+          transaction_id: null,
+        },
+      },
+    });
+
+    const { body } = await request(app)
+      .post("/receipt/scan-slip")
+      .attach("image", Buffer.from("jpeg"), "slip.jpg");
+
+    expect(body.suggested_store).toBe("ร้านลุงเบิร์ด");
+  });
+
+  it("surfaces a slip OCR backend failure as 502", async () => {
+    const { app } = await buildApp();
+    stubBackend({ slip: { status: 500, body: { detail: "boom" } } });
+
+    const response = await request(app)
+      .post("/receipt/scan-slip")
+      .attach("image", Buffer.from("jpeg"), "slip.jpg");
+
+    expect(response.status).toBe(502);
   });
 });
 
@@ -353,6 +432,86 @@ describe("POST /receipt/confirm", () => {
 
       expect(response.status).toBe(400);
       expect(await sheets.readPriceHistory()).toMatchObject([]);
+    });
+  });
+
+  describe("slip reconciliation", () => {
+    const slipBody = {
+      store: "ร้านลุงเบิร์ด",
+      purchased_at: "2026-08-17",
+      items: [
+        { raw_text: "ก๋วยเตี๋ยว", price: 40, master_item_name: "ก๋วยเตี๋ยว", category: "food" },
+        { raw_text: "น้ำเปล่า", price: 15, master_item_name: "น้ำเปล่า", category: "food" },
+      ],
+      slip: { payee: "ร้านถุงเงิน (นายเบิร์ด)", amount: 55 },
+    };
+
+    it("writes normally when the entered items add up to the slip's amount", async () => {
+      const { app, sheets } = await buildApp();
+
+      const response = await request(app).post("/receipt/confirm").send(slipBody);
+
+      expect(response.status).toBe(200);
+      expect(await sheets.readPriceHistory()).toHaveLength(2);
+    });
+
+    it("rejects and writes nothing when the items don't add up to the slip's amount", async () => {
+      const { app, sheets } = await buildApp();
+
+      const response = await request(app)
+        .post("/receipt/confirm")
+        .send({ ...slipBody, items: [slipBody.items[0]] }); // only 40, slip says 55
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/40\.00.*55\.00/);
+      expect(await sheets.readPriceHistory()).toEqual([]);
+    });
+
+    it("tolerates only floating-point noise, not a real shortfall", async () => {
+      const { app } = await buildApp();
+
+      const response = await request(app)
+        .post("/receipt/confirm")
+        .send({
+          ...slipBody,
+          items: [
+            { ...slipBody.items[0], price: 40 + 0.001 },
+            { ...slipBody.items[1], price: 15 - 0.001 },
+          ],
+        });
+
+      expect(response.status).toBe(200);
+    });
+
+    it("remembers the payee -> store mapping only after a successful write", async () => {
+      const { app, sheets } = await buildApp();
+
+      await request(app).post("/receipt/confirm").send(slipBody);
+
+      expect(await sheets.findStoreForPayee("ร้านถุงเงิน (นายเบิร์ด)")).toBe("ร้านลุงเบิร์ด");
+    });
+
+    it("does not remember a mapping when reconciliation fails", async () => {
+      const { app, sheets } = await buildApp();
+
+      await request(app)
+        .post("/receipt/confirm")
+        .send({ ...slipBody, items: [slipBody.items[0]] });
+
+      expect(await sheets.findStoreForPayee("ร้านถุงเงิน (นายเบิร์ด)")).toBeNull();
+    });
+
+    it("is a no-op for a normal receipt with no slip field", async () => {
+      // Backward compatibility: every caller that predates `slip` must
+      // behave exactly as before, with no reconciliation check at all.
+      const { app, sheets } = await buildApp();
+
+      const response = await request(app)
+        .post("/receipt/confirm")
+        .send({ ...confirmBody, items: [{ ...confirmBody.items[0], price: 999 }] });
+
+      expect(response.status).toBe(200);
+      expect(await sheets.readPriceHistory()).toHaveLength(1);
     });
   });
 });

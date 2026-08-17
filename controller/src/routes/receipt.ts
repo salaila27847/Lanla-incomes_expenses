@@ -8,6 +8,7 @@ import {
   findStoreForPayee,
   lineTotal,
   readMasterItems,
+  readPriceHistory,
   upsertSlipPayeeMapping,
   type ItemCategory,
 } from "../sheets/client";
@@ -152,6 +153,16 @@ receiptRouter.post("/scan", upload.single("image"), async (req, res) => {
 /** The master item list on its own, for the manual-entry form. */
 receiptRouter.get("/master-items", async (_req, res) => {
   res.json({ master_items: await readMasterItems() });
+});
+
+/** Distinct store names used in PriceHistory before, for the store picker
+ *  — same "pick existing or name a new one" pattern as master items, so
+ *  the same store doesn't end up recorded under several spellings. */
+receiptRouter.get("/store-names", async (_req, res) => {
+  const names = (await readPriceHistory())
+    .map((row) => row.store)
+    .filter((store): store is string => Boolean(store));
+  res.json({ store_names: Array.from(new Set(names)) });
 });
 
 interface SlipOcrResponse {

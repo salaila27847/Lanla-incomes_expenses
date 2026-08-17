@@ -75,6 +75,24 @@ interface Expense {
   discount: number;
 }
 
+interface ExpenseDateGroup {
+  date: string;
+  items: Expense[];
+}
+
+/** Buckets an already-sorted expense list into consecutive same-date runs.
+ *  Relies on the caller's ordering rather than re-sorting -- `/expenses`
+ *  already returns newest date first, so grouping preserves that. */
+export function groupExpensesByDate(expenses: Expense[]): ExpenseDateGroup[] {
+  const groups: ExpenseDateGroup[] = [];
+  for (const expense of expenses) {
+    const current = groups[groups.length - 1];
+    if (current && current.date === expense.date) current.items.push(expense);
+    else groups.push({ date: expense.date, items: [expense] });
+  }
+  return groups;
+}
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3001";
 
 export default function Budget() {
@@ -504,42 +522,49 @@ export default function Budget() {
         {expenses.length === 0 ? (
           <p className="mt-2 text-sm text-slate-500">ยังไม่มีรายการในรอบนี้</p>
         ) : (
-          <ul className="mt-2 divide-y divide-slate-800">
-            {expenses.map((expense) =>
-              editingId === expense.id ? (
-                <ExpenseEditor
-                  key={expense.id}
-                  expense={expense}
-                  onCancel={() => setEditingId(null)}
-                  onSave={(patch) => saveExpense(expense.id, patch)}
-                  onDelete={() => deleteExpense(expense.id)}
-                />
-              ) : (
-                <li key={expense.id}>
-                  <button
-                    type="button"
-                    onClick={() => setEditingId(expense.id)}
-                    className="flex w-full items-center justify-between gap-2 py-2 text-left text-sm"
-                  >
-                    <span className="min-w-0 flex-1 truncate">
-                      {expense.category === "food" ? "🍔" : "🧴"} {expense.masterItemName}
-                      {expense.quantity > 1 && (
-                        <span className="text-slate-500"> ×{expense.quantity}</span>
-                      )}
-                    </span>
-                    <span className="shrink-0 tabular-nums">
-                      {(expense.price * expense.quantity - expense.discount).toLocaleString()} บาท
-                      {expense.discount > 0 && (
-                        <span className="ml-1 text-xs text-emerald-400">
-                          (ลด {expense.discount.toLocaleString()})
-                        </span>
-                      )}
-                    </span>
-                  </button>
-                </li>
-              ),
-            )}
-          </ul>
+          <div className="mt-2">
+            {groupExpensesByDate(expenses).map((group, index) => (
+              <div key={group.date} className={index > 0 ? "mt-3" : ""}>
+                <p className="text-xs font-medium text-slate-400">{shortDate(group.date)}</p>
+                <ul className="mt-1 divide-y divide-slate-800">
+                  {group.items.map((expense) =>
+                    editingId === expense.id ? (
+                      <ExpenseEditor
+                        key={expense.id}
+                        expense={expense}
+                        onCancel={() => setEditingId(null)}
+                        onSave={(patch) => saveExpense(expense.id, patch)}
+                        onDelete={() => deleteExpense(expense.id)}
+                      />
+                    ) : (
+                      <li key={expense.id}>
+                        <button
+                          type="button"
+                          onClick={() => setEditingId(expense.id)}
+                          className="flex w-full items-center justify-between gap-2 py-2 text-left text-sm"
+                        >
+                          <span className="min-w-0 flex-1 truncate">
+                            {expense.category === "food" ? "🍔" : "🧴"} {expense.masterItemName}
+                            {expense.quantity > 1 && (
+                              <span className="text-slate-500"> ×{expense.quantity}</span>
+                            )}
+                          </span>
+                          <span className="shrink-0 tabular-nums">
+                            {(expense.price * expense.quantity - expense.discount).toLocaleString()} บาท
+                            {expense.discount > 0 && (
+                              <span className="ml-1 text-xs text-emerald-400">
+                                (ลด {expense.discount.toLocaleString()})
+                              </span>
+                            )}
+                          </span>
+                        </button>
+                      </li>
+                    ),
+                  )}
+                </ul>
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </section>

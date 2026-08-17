@@ -569,3 +569,58 @@ describe("backend reachability", () => {
     });
   });
 });
+
+describe("GET /receipt/store-names", () => {
+  it("is empty for a fresh install", async () => {
+    const { app } = await buildApp();
+
+    const { body } = await request(app).get("/receipt/store-names");
+
+    expect(body.store_names).toEqual([]);
+  });
+
+  it("lists each store used in PriceHistory once", async () => {
+    const { app, sheets } = await buildApp();
+    await sheets.appendPriceHistoryRow({
+      date: "2026-08-04",
+      store: "7-Eleven",
+      masterItemName: "นมสด UHT 250ml",
+      category: "food",
+      price: 15,
+    });
+    await sheets.appendPriceHistoryRow({
+      date: "2026-08-05",
+      store: "Lotus's",
+      masterItemName: "สบู่เหลว",
+      category: "goods",
+      price: 59,
+    });
+    await sheets.appendPriceHistoryRow({
+      date: "2026-08-06",
+      store: "7-Eleven",
+      masterItemName: "มาม่า",
+      category: "food",
+      price: 6,
+    });
+
+    const { body } = await request(app).get("/receipt/store-names");
+
+    // Feeds the store picker -- duplicates would show as repeated options.
+    expect(body.store_names).toEqual(["7-Eleven", "Lotus's"]);
+  });
+
+  it("skips rows with no store", async () => {
+    const { app, sheets } = await buildApp();
+    await sheets.appendPriceHistoryRow({
+      date: "2026-08-04",
+      store: null,
+      masterItemName: "นมสด UHT 250ml",
+      category: "food",
+      price: 15,
+    });
+
+    const { body } = await request(app).get("/receipt/store-names");
+
+    expect(body.store_names).toEqual([]);
+  });
+});

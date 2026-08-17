@@ -4,6 +4,7 @@ import MasterItemPicker, {
   type MasterItem,
   type MatchCandidate,
 } from "../components/MasterItemPicker";
+import StorePicker from "../components/StorePicker";
 
 type ReceiptCategory = "food" | "goods";
 type PaidFrom = "spending" | "savings";
@@ -92,6 +93,7 @@ export default function ReceiptReview() {
   const [purchasedAt, setPurchasedAt] = useState<string | null>(null);
   const [items, setItems] = useState<ReceiptLineItem[]>([]);
   const [masterItems, setMasterItems] = useState<MasterItem[]>([]);
+  const [storeNames, setStoreNames] = useState<string[]>([]);
   const [savedPendingSavingsCount, setSavedPendingSavingsCount] = useState(0);
   // Set only by a slip scan — the amount actually transferred, which the
   // entered items must add up to exactly before saving is allowed. null
@@ -106,6 +108,10 @@ export default function ReceiptReview() {
       .then((response) => (response.ok ? response.json() : { master_items: [] }))
       .then((body) => setMasterItems(body.master_items))
       .catch(() => setMasterItems([]));
+    fetch(`${API_BASE_URL}/receipt/store-names`)
+      .then((response) => (response.ok ? response.json() : { store_names: [] }))
+      .then((body) => setStoreNames(body.store_names))
+      .catch(() => setStoreNames([]));
   }, []);
 
   async function handleFileSelected(event: React.ChangeEvent<HTMLInputElement>) {
@@ -398,17 +404,14 @@ export default function ReceiptReview() {
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-2">
-            <label className="text-xs text-slate-500">
-              ร้าน
-              <input
-                value={store ?? ""}
-                onChange={(event) => setStore(event.target.value || null)}
-                placeholder="เช่น Lotus's"
-                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-              />
-            </label>
-            <label className="text-xs text-slate-500">
+          <div className="space-y-2">
+            <div>
+              <p className="text-xs text-slate-500">ร้าน</p>
+              <div className="mt-1">
+                <StorePicker value={store} storeNames={storeNames} onChange={setStore} />
+              </div>
+            </div>
+            <label className="block text-xs text-slate-500">
               วันที่
               <input
                 type="date"

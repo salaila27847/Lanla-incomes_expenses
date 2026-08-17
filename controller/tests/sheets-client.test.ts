@@ -126,6 +126,46 @@ describe("must-pay items in mock mode", () => {
 
     await expect(client.updateMustPayStatus("no-such-id", "paid")).resolves.not.toThrow();
   });
+
+  it("rewrites an item's amount without touching its other fields", async () => {
+    const client = await loadClient();
+    const item = await client.appendMustPayItem({
+      name: "บัตรเครดิต KTC",
+      amount: 1200,
+      month: "2026-08",
+    });
+
+    await client.updateMustPayAmount(item.id, 2000);
+
+    const [stored] = await client.readMustPayItems();
+    expect(stored).toMatchObject({ name: "บัตรเครดิต KTC", amount: 2000, status: "unpaid" });
+  });
+
+  it("updateMustPayAmount reports an unknown id as false rather than throwing", async () => {
+    const client = await loadClient();
+
+    await expect(client.updateMustPayAmount("no-such-id", 100)).resolves.toBe(false);
+  });
+});
+
+describe("recurring bills in mock mode", () => {
+  it("starts with no lastBilledCycle", async () => {
+    const client = await loadClient();
+
+    const bill = await client.appendRecurringBill({ name: "ค่าเน็ต", amount: 590 });
+
+    expect(bill.lastBilledCycle).toBeNull();
+  });
+
+  it("reads back a stamped lastBilledCycle", async () => {
+    const client = await loadClient();
+    const bill = await client.appendRecurringBill({ name: "ค่าเน็ต", amount: 590 });
+
+    await client.updateRecurringBill(bill.id, { lastBilledCycle: "2026-08" });
+
+    const [stored] = await client.readRecurringBills();
+    expect(stored.lastBilledCycle).toBe("2026-08");
+  });
 });
 
 describe("real mode row mapping", () => {

@@ -10,6 +10,7 @@ import {
   readMustPayItems,
   readPriceHistory,
   readRecurringBills,
+  updateMustPayAmount,
   updateMustPayStatus,
   updateRecurringBill,
   type RecurringBill,
@@ -21,19 +22,28 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-// Turns each active RecurringBill into this cycle's MustPay row, the first
-// time this cycle is asked for and never again — existing rows tagged with
-// a group's key are how it tells "already generated" from "the user typed
-// this name by hand". Several bills sharing a cardGroup collapse into one
-// row (one card statement, not one transfer per thing on it); an ungrouped
-// bill is a group of one, keyed by its own id.
+// Turns each active RecurringBill into this cycle's MustPay row. Several
+// bills sharing a cardGroup collapse into one row (one card statement, not
+// one transfer per thing on it); an ungrouped bill is a group of one,
+// keyed by its own id.
+//
+// This has to tolerate a group's row already existing for this cycle —
+// the form calls GET /budget again after every POST /budget/recurring, so
+// a second or third instalment is routinely added to a card group *after*
+// its row already generated from the first. Skipping the group whenever a
+// row already exists (the original approach) left it permanently stuck at
+// whichever bills existed at that first GET, silently dropping every
+// instalment added afterward from the total. Recomputing the sum from
+// every active bill and writing it back handles that; lastBilledCycle
+// (not group membership) is what stops a bill's instalment count being
+// decremented twice for the same cycle once it's already been counted.
 async function generateRecurringMustPay(cycleKey: string): Promise<void> {
   const [bills, existingMustPay] = await Promise.all([readRecurringBills(), readMustPayItems()]);
 
-  const alreadyGenerated = new Set(
+  const existingByGroup = new Map(
     existingMustPay
       .filter((item) => item.month === cycleKey && item.recurringGroupKey)
-      .map((item) => item.recurringGroupKey),
+      .map((item) => [item.recurringGroupKey as string, item]),
   );
 
   const groups = new Map<string, RecurringBill[]>();
@@ -46,21 +56,29 @@ async function generateRecurringMustPay(cycleKey: string): Promise<void> {
   }
 
   for (const [groupKey, groupBills] of groups) {
-    if (alreadyGenerated.has(groupKey)) continue;
-
     const amount = groupBills.reduce((sum, bill) => sum + bill.amount, 0);
-    // A shared card is named for the card, not whichever instalment
-    // happens to be first — that's what the statement itself says.
-    const name = groupBills[0].cardGroup ?? groupBills[0].name;
-    await appendMustPayItem({ name, amount, month: cycleKey, recurringGroupKey: groupKey });
+    const existingRow = existingByGroup.get(groupKey);
+
+    if (!existingRow) {
+      // A shared card is named for the card, not whichever instalment
+      // happens to be first — that's what the statement itself says.
+      const name = groupBills[0].cardGroup ?? groupBills[0].name;
+      await appendMustPayItem({ name, amount, month: cycleKey, recurringGroupKey: groupKey });
+    } else if (existingRow.amount !== amount) {
+      await updateMustPayAmount(existingRow.id, amount);
+    }
 
     await Promise.all(
       groupBills.map((bill) => {
-        if (bill.installmentsRemaining === null) return null; // no end date: recurs forever
+        if (bill.lastBilledCycle === cycleKey) return null; // already counted this cycle
+        if (bill.installmentsRemaining === null) {
+          return updateRecurringBill(bill.id, { lastBilledCycle: cycleKey }); // recurs forever
+        }
         const remaining = bill.installmentsRemaining - 1;
         return updateRecurringBill(bill.id, {
           installmentsRemaining: remaining,
           active: remaining > 0,
+          lastBilledCycle: cycleKey,
         });
       }),
     );

@@ -193,6 +193,14 @@ export interface MustPayItem {
 // cardGroup lets several instalments billed through the same card collapse
 // into one MustPay row each cycle — what you actually pay is one card
 // statement, not one transfer per product on it.
+//
+// lastBilledCycle is the cycle key this bill's instalment was last counted
+// down for. Without it, a bill added to a cardGroup whose row already
+// exists for the current cycle has no way to tell "already billed this
+// cycle" from "never billed at all" other than by group — and grouping by
+// that alone either re-decrements bills that were already counted, or
+// silently skips ones added after the row was first generated. Null means
+// never billed.
 export interface RecurringBill {
   id: string;
   name: string;
@@ -200,6 +208,7 @@ export interface RecurringBill {
   cardGroup: string | null;
   installmentsRemaining: number | null;
   active: boolean;
+  lastBilledCycle: string | null;
 }
 
 export interface CycleRow {
@@ -510,6 +519,22 @@ export async function updateMustPayStatus(
   return true;
 }
 
+/** Rewrites a generated row's amount when its cardGroup's bills change
+ *  mid-cycle — see generateRecurringMustPay in routes/budget.ts. */
+export async function updateMustPayAmount(id: string, amount: number): Promise<boolean> {
+  if (MOCK_MODE) {
+    const item = mockMustPayItems.find((mustPay) => mustPay.id === id);
+    if (!item) return false;
+    item.amount = amount;
+    return true;
+  }
+
+  const rowNumber = await findRowNumber("MustPay!A2:A", id);
+  if (rowNumber === null) return false;
+  await updateRange(`MustPay!C${rowNumber}:C${rowNumber}`, [amount]);
+  return true;
+}
+
 export async function deleteMustPayItem(id: string): Promise<boolean> {
   if (MOCK_MODE) {
     const index = mockMustPayItems.findIndex((item) => item.id === id);
@@ -538,7 +563,9 @@ export async function readRecurringBills(): Promise<RecurringBill[]> {
   if (MOCK_MODE) {
     return mockRecurringBills;
   }
-  const rows = await readOptionalRange("RecurringBills!A2:F");
+  // Column G (lastBilledCycle) postdates the original six columns, same
+  // blank-means-null handling as MustPay's RecurringGroupKey.
+  const rows = await readOptionalRange("RecurringBills!A2:G");
   return rows
     .filter((row) => row[0])
     .map((row) => ({
@@ -548,6 +575,7 @@ export async function readRecurringBills(): Promise<RecurringBill[]> {
       cardGroup: row[3] ? String(row[3]) : null,
       installmentsRemaining: toOptionalNumber(row[4]),
       active: row[5] !== "false",
+      lastBilledCycle: row[6] ? String(row[6]) : null,
     }));
 }
 
@@ -564,18 +592,20 @@ export async function appendRecurringBill(input: {
     cardGroup: input.cardGroup ?? null,
     installmentsRemaining: input.installmentsRemaining ?? null,
     active: true,
+    lastBilledCycle: null,
   };
   if (MOCK_MODE) {
     mockRecurringBills.push(bill);
     return bill;
   }
-  await appendRow("RecurringBills!A:F", [
+  await appendRow("RecurringBills!A:G", [
     bill.id,
     bill.name,
     bill.amount,
     bill.cardGroup ?? "",
     bill.installmentsRemaining ?? "",
     "true",
+    "",
   ]);
   return bill;
 }
@@ -585,7 +615,7 @@ export async function appendRecurringBill(input: {
  *  own — see the note on RecurringBill for why that matters. */
 export async function updateRecurringBill(
   id: string,
-  updates: { installmentsRemaining?: number | null; active?: boolean },
+  updates: { installmentsRemaining?: number | null; active?: boolean; lastBilledCycle?: string | null },
 ): Promise<RecurringBill | null> {
   const existing = (await readRecurringBills()).find((bill) => bill.id === id);
   if (!existing) return null;
@@ -599,9 +629,10 @@ export async function updateRecurringBill(
 
   const rowNumber = await findRowNumber("RecurringBills!A2:A", id);
   if (rowNumber === null) return null;
-  await updateRange(`RecurringBills!E${rowNumber}:F${rowNumber}`, [
+  await updateRange(`RecurringBills!E${rowNumber}:G${rowNumber}`, [
     merged.installmentsRemaining ?? "",
     String(merged.active),
+    merged.lastBilledCycle ?? "",
   ]);
   return merged;
 }
@@ -616,7 +647,7 @@ export async function deleteRecurringBill(id: string): Promise<boolean> {
 
   const rowNumber = await findRowNumber("RecurringBills!A2:A", id);
   if (rowNumber === null) return false;
-  await updateRange(`RecurringBills!A${rowNumber}:F${rowNumber}`, ["", "", "", "", "", ""]);
+  await updateRange(`RecurringBills!A${rowNumber}:G${rowNumber}`, ["", "", "", "", "", "", ""]);
   return true;
 }
 

@@ -541,6 +541,65 @@ describe("recurring bills — generation on GET /budget", () => {
     expect(body.mustPay).toMatchObject([{ name: "บัตรเครดิต KTC", amount: 2000 }]);
   });
 
+  it("folds a bill added mid-cycle into the group's already-generated row", async () => {
+    // The realistic flow: the form calls GET /budget again after every
+    // POST /budget/recurring, so a card group's row is often already on
+    // the sheet by the time the second and third instalment get added.
+    const { app, sheets } = await buildApp();
+    await sheets.appendRecurringBill({
+      name: "ผ่อนโทรศัพท์",
+      amount: 1200,
+      cardGroup: "บัตรเครดิต KTC",
+      installmentsRemaining: 10,
+    });
+    await request(app).get("/budget"); // generates the row with just bill 1
+
+    await sheets.appendRecurringBill({
+      name: "ผ่อนตู้เย็น",
+      amount: 800,
+      cardGroup: "บัตรเครดิต KTC",
+      installmentsRemaining: 6,
+    });
+    await sheets.appendRecurringBill({
+      name: "ผ่อนโน้ตบุ๊ก",
+      amount: 1500,
+      cardGroup: "บัตรเครดิต KTC",
+      installmentsRemaining: 12,
+    });
+
+    const { body } = await request(app).get("/budget");
+
+    expect(body.mustPay).toMatchObject([{ name: "บัตรเครดิต KTC", amount: 3500 }]);
+    // Still one row, not three.
+    const rows = (await sheets.readMustPayItems()).filter((item) => item.month === THIS_CYCLE);
+    expect(rows).toHaveLength(1);
+  });
+
+  it("decrements a mid-cycle-added bill's instalments exactly once, not the older bills again", async () => {
+    const { app, sheets } = await buildApp();
+    const first = await sheets.appendRecurringBill({
+      name: "ผ่อนโทรศัพท์",
+      amount: 1200,
+      cardGroup: "บัตรเครดิต KTC",
+      installmentsRemaining: 10,
+    });
+    await request(app).get("/budget");
+    await request(app).get("/budget"); // extra page loads must not double-decrement bill 1
+
+    const second = await sheets.appendRecurringBill({
+      name: "ผ่อนตู้เย็น",
+      amount: 800,
+      cardGroup: "บัตรเครดิต KTC",
+      installmentsRemaining: 6,
+    });
+    await request(app).get("/budget");
+    await request(app).get("/budget"); // and must not double-decrement bill 2 either
+
+    const bills = await sheets.readRecurringBills();
+    expect(bills.find((b) => b.id === first.id)).toMatchObject({ installmentsRemaining: 9 });
+    expect(bills.find((b) => b.id === second.id)).toMatchObject({ installmentsRemaining: 5 });
+  });
+
   it("leaves a bill with no installment count recurring forever", async () => {
     const { app, sheets } = await buildApp();
     const bill = await sheets.appendRecurringBill({ name: "ค่าเช่า", amount: 4000 });

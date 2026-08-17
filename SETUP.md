@@ -56,8 +56,8 @@ recurring-bill generation is affected (it would create a duplicate row
 each cycle instead of recognising the one it already made).
 
 **Tab `RecurringBills`**
-| ID | Name | Amount | CardGroup | InstallmentsRemaining | Active |
-|----|------|--------|-----------|------------------------|--------|
+| ID | Name | Amount | CardGroup | InstallmentsRemaining | Active | LastBilledCycle |
+|----|------|--------|-----------|------------------------|--------|------------------|
 
 A template, not a per-cycle row: the app creates one `MustPay` row from
 each active bill here the first time a new cycle is opened, tagging it
@@ -68,7 +68,20 @@ generates a row and the bill goes `Active` = `false` on its own at zero,
 the way an instalment plan actually ends. Several bills sharing the same
 `CardGroup` collapse into a single `MustPay` row each cycle, named for the
 card and summing their amounts — one card statement, not one transfer per
-thing on it.
+thing on it. Adding a second or third bill to a `CardGroup` whose row for
+this cycle already exists updates that row's amount instead of leaving it
+stuck at whatever the group summed to when the row was first generated.
+`LastBilledCycle` is the cycle key (`YYYY-MM`) this bill's instalment was
+last counted down for — blank means never billed — and is what stops a
+bill already counted this cycle from having its `InstallmentsRemaining`
+decremented a second time once its group's row gets recomputed for a
+newly added bill.
+
+⚠️ **If your Sheet already has this tab**, add the `LastBilledCycle`
+header by hand for clarity — `setUpTrackerSheet` never touches a tab that
+already exists. The app reads and writes column G by position regardless
+of whether row 1 labels it, so this is cosmetic; nothing behaves
+differently either way.
 
 **Tab `Cycles`**
 | CycleKey | PaydayDate | SavingsBalance |

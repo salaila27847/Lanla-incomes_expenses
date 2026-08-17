@@ -64,13 +64,20 @@ var TABS = [
   },
   {
     // A template, not a per-cycle row: the app creates one MustPay row per
-    // active bill here the first time a new cycle is opened. Blank
-    // InstallmentsRemaining means no end date; a number counts down and
-    // the bill goes inactive at zero. Bills sharing a CardGroup collapse
-    // into a single MustPay row each cycle, summing their amounts.
+    // active bill here the first time a new cycle is opened, and updates
+    // that row's amount if a bill is added to the group later in the same
+    // cycle. Blank InstallmentsRemaining means no end date; a number
+    // counts down and the bill goes inactive at zero. Bills sharing a
+    // CardGroup collapse into a single MustPay row each cycle, summing
+    // their amounts. LastBilledCycle (blank = never billed) is the cycle
+    // key a bill's instalment was last counted down for -- what stops a
+    // bill already counted this cycle from being decremented again when
+    // its group's row gets recomputed for a newly added bill.
     name: 'RecurringBills',
-    headers: ['ID', 'Name', 'Amount', 'CardGroup', 'InstallmentsRemaining', 'Active'],
-    textColumns: [],
+    headers: [
+      'ID', 'Name', 'Amount', 'CardGroup', 'InstallmentsRemaining', 'Active', 'LastBilledCycle',
+    ],
+    textColumns: [7], // LastBilledCycle: a pay-cycle key, YYYY-MM
   },
   {
     name: 'Cycles',

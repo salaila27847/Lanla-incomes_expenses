@@ -10,7 +10,7 @@ The same file has a `checkTrackerSheet` you can run afterwards: it reads nothing
 
 The rest of this section is the reference for what the script builds (or for doing it by hand).
 
-Create a new Google Sheet with eight tabs, each with an exact header row in row 1:
+Create a new Google Sheet with nine tabs, each with an exact header row in row 1:
 
 **Tab `MasterItems`**
 | Name | Category | CreatedAt |
@@ -95,6 +95,17 @@ the confirmation date, so a purchase near the end of a pay cycle can't jump
 into the wrong one just because it was confirmed later. Confirming or
 cancelling it removes the row from here.
 
+**Tab `SlipPayees`**
+| PayeeName | StoreName |
+|-----------|-----------|
+
+Maps a transfer slip's registered payee name (e.g. `ร้านถุงเงิน (แซ่บเล้ง
+แอนด์ หม่าล่านายเบิร์ด)`, rarely how you'd type that store's name yourself)
+to the store name you actually want recorded. Written automatically the
+first time a slip-scanned receipt for that payee is confirmed, and read
+back to prefill the store field the next time the same payee shows up —
+nothing to fill in by hand.
+
 **Tab `Income`**
 | ID | Date | Source | Amount |
 |----|------|--------|--------|
@@ -134,4 +145,4 @@ SHEETS_SPREADSHEET_ID=<the ID from step 1>
 SHEETS_MOCK_MODE=false
 ```
 
-Restart the controller. All of `controller/src/sheets/client.ts` (master items, price history, pending savings transfers, must-pay, recurring bills, cycles, income, settings) now hits the real Sheet instead of the in-memory mock.
+Restart the controller. All of `controller/src/sheets/client.ts` (master items, price history, pending savings transfers, must-pay, recurring bills, cycles, slip payees, income, settings) now hits the real Sheet instead of the in-memory mock.

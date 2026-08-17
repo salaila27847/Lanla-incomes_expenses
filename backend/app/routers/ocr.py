@@ -11,6 +11,7 @@ from app.config import (
     TYPHOON_TEXT_MODEL,
 )
 from app.fixtures.sample_receipt import SAMPLE_RECEIPT
+from app.fixtures.sample_slip import SAMPLE_SLIP
 
 router = APIRouter()
 
@@ -36,6 +37,24 @@ STRUCTURE_PROMPT_PREFIX = (
     "or abbreviated. Do not invent items that aren't on the receipt, and "
     "never list a discount, a subtotal, a total, VAT, or change as an item.\n\n"
     "OCR text:\n"
+)
+
+# A transfer/payment slip (Make by KBank, PromptPay, etc.) carries no
+# product lines -- only who was paid, when, and how much -- so it gets its
+# own prompt and schema rather than being forced through STRUCTURE_PROMPT_PREFIX,
+# which would otherwise leave the model inventing an items list to satisfy
+# a shape the document doesn't have.
+SLIP_PROMPT_PREFIX = (
+    "You are reading OCR output of a Thai bank transfer or payment slip -- "
+    "NOT an itemised retail receipt. It has no product lines, only who was "
+    "paid, when, and how much. Respond with ONLY valid JSON (no markdown "
+    "fences, no commentary) in this exact shape:\n"
+    '{"payee": "<name of the person or shop that received the money, or '
+    'null>", "purchased_at": "<YYYY-MM-DD or null>", "amount": <the total '
+    'amount transferred, as a number>, "transaction_id": "<the '
+    'transaction/reference ID printed on the slip, or null>"}\n'
+    "amount is the total that actually moved in this transfer, exactly as "
+    "printed -- not the fee, and not a subtotal.\n"
 )
 
 
@@ -107,6 +126,26 @@ def _normalise_items(parsed: dict) -> dict:
     }
 
 
+def _normalise_slip(parsed: dict) -> dict:
+    """Turn the structuring model's transfer-slip JSON into a fixed shape.
+
+    A slip has no items, so unlike _normalise_items there's no quantity or
+    discount arithmetic here -- just the four fields, with an unparsable
+    amount landing on 0.0 rather than crashing the request.
+    """
+    try:
+        amount = round(float(parsed.get("amount")), 2)
+    except (TypeError, ValueError):
+        amount = 0.0
+
+    return {
+        "payee": parsed.get("payee"),
+        "purchased_at": parsed.get("purchased_at"),
+        "amount": amount,
+        "transaction_id": parsed.get("transaction_id"),
+    }
+
+
 async def _log_diagnostics(http_client: httpx.AsyncClient, headers: dict) -> None:
     """On a failed Typhoon call, dump the config and the reachable model IDs.
 
@@ -141,6 +180,83 @@ async def _log_diagnostics(http_client: httpx.AsyncClient, headers: dict) -> Non
             print(f"[ocr] raw /models response: {response.text[:1000]!r}")
 
 
+async def _fetch_ocr_text(
+    http_client: httpx.AsyncClient,
+    auth_headers: dict,
+    image_bytes: bytes,
+    filename: str,
+    content_type: str,
+) -> str:
+    """Stage 1, shared by every document type: typhoon-ocr is only served
+    through this dedicated multipart endpoint (not /chat/completions), and
+    it has no custom prompt -- it just returns the document's raw OCR text,
+    receipt or slip alike."""
+    ocr_response = await http_client.post(
+        f"{TYPHOON_BASE_URL}/ocr",
+        headers=auth_headers,
+        files={"file": (filename, image_bytes, content_type)},
+        data={
+            "model": TYPHOON_OCR_MODEL,
+            "task_type": "default",
+            "max_tokens": "16384",
+            "temperature": "0.1",
+            "top_p": "0.6",
+            "repetition_penalty": "1.2",
+        },
+    )
+    if ocr_response.status_code != 200:
+        # Printed (not just raised) because /controller only forwards our
+        # status code to the PWA, not this detail -- Vercel logs are the
+        # only place the actual Typhoon error body is visible.
+        print(f"[ocr] OCR call failed: {ocr_response.status_code} {ocr_response.text}")
+        await _log_diagnostics(http_client, auth_headers)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Typhoon OCR returned {ocr_response.status_code}: {ocr_response.text}",
+        )
+
+    page_results = ocr_response.json().get("results", [])
+    if not page_results or not page_results[0].get("success"):
+        error = page_results[0].get("error") if page_results else "no results"
+        raise HTTPException(status_code=502, detail=f"Typhoon OCR failed: {error}")
+
+    raw_content = page_results[0]["message"]["choices"][0]["message"]["content"]
+    try:
+        return json.loads(raw_content).get("natural_text", raw_content)
+    except json.JSONDecodeError:
+        return raw_content
+
+
+async def _structure(http_client: httpx.AsyncClient, auth_headers: dict, prompt: str) -> dict:
+    """Stage 2, shared by every document type: a regular chat model turns
+    stage 1's raw OCR text into whatever JSON schema `prompt` asked for."""
+    structure_response = await http_client.post(
+        f"{TYPHOON_BASE_URL}/chat/completions",
+        headers=auth_headers,
+        json={"model": TYPHOON_TEXT_MODEL, "messages": [{"role": "user", "content": prompt}]},
+    )
+    if structure_response.status_code != 200:
+        print(
+            f"[ocr] structuring call failed: {structure_response.status_code} "
+            f"{structure_response.text}"
+        )
+        await _log_diagnostics(http_client, auth_headers)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Typhoon structuring call returned {structure_response.status_code}: "
+            f"{structure_response.text}",
+        )
+
+    try:
+        content = structure_response.json()["choices"][0]["message"]["content"]
+        return json.loads(content)
+    except (json.JSONDecodeError, KeyError, IndexError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Typhoon structuring returned an unparsable response: {exc}",
+        ) from exc
+
+
 @router.post("/")
 async def scan_receipt(image: UploadFile = File(...)) -> dict:
     """Line-item OCR: split one long receipt image into per-line entries.
@@ -161,79 +277,49 @@ async def scan_receipt(image: UploadFile = File(...)) -> dict:
             detail="TYPHOON_API_KEY is not set and OCR_MOCK_MODE is off",
         )
 
-    content_type = image.content_type or "image/jpeg"
     auth_headers = {"Authorization": f"Bearer {TYPHOON_API_KEY}"}
-
     async with httpx.AsyncClient(timeout=60) as http_client:
-        # Stage 1: typhoon-ocr is only served through this dedicated
-        # multipart endpoint (not /chat/completions), and it has no custom
-        # prompt -- it just returns the document's raw OCR text.
-        ocr_response = await http_client.post(
-            f"{TYPHOON_BASE_URL}/ocr",
-            headers=auth_headers,
-            files={"file": (image.filename or "receipt.jpg", image_bytes, content_type)},
-            data={
-                "model": TYPHOON_OCR_MODEL,
-                "task_type": "default",
-                "max_tokens": "16384",
-                "temperature": "0.1",
-                "top_p": "0.6",
-                "repetition_penalty": "1.2",
-            },
+        ocr_text = await _fetch_ocr_text(
+            http_client,
+            auth_headers,
+            image_bytes,
+            image.filename or "receipt.jpg",
+            image.content_type or "image/jpeg",
         )
-        if ocr_response.status_code != 200:
-            # Printed (not just raised) because /controller only forwards our
-            # status code to the PWA, not this detail -- Vercel logs are the
-            # only place the actual Typhoon error body is visible.
-            print(f"[ocr] OCR call failed: {ocr_response.status_code} {ocr_response.text}")
-            await _log_diagnostics(http_client, auth_headers)
-            raise HTTPException(
-                status_code=502,
-                detail=f"Typhoon OCR returned {ocr_response.status_code}: {ocr_response.text}",
-            )
-
-        page_results = ocr_response.json().get("results", [])
-        if not page_results or not page_results[0].get("success"):
-            error = page_results[0].get("error") if page_results else "no results"
-            raise HTTPException(status_code=502, detail=f"Typhoon OCR failed: {error}")
-
-        raw_content = page_results[0]["message"]["choices"][0]["message"]["content"]
-        try:
-            ocr_text = json.loads(raw_content).get("natural_text", raw_content)
-        except json.JSONDecodeError:
-            ocr_text = raw_content
-
-        # Stage 2: a regular chat model turns the raw OCR text into our
-        # {store, purchased_at, items} schema.
-        structure_response = await http_client.post(
-            f"{TYPHOON_BASE_URL}/chat/completions",
-            headers=auth_headers,
-            json={
-                "model": TYPHOON_TEXT_MODEL,
-                "messages": [
-                    {"role": "user", "content": STRUCTURE_PROMPT_PREFIX + ocr_text}
-                ],
-            },
-        )
-        if structure_response.status_code != 200:
-            print(
-                f"[ocr] structuring call failed: {structure_response.status_code} "
-                f"{structure_response.text}"
-            )
-            await _log_diagnostics(http_client, auth_headers)
-            raise HTTPException(
-                status_code=502,
-                detail=f"Typhoon structuring call returned {structure_response.status_code}: "
-                f"{structure_response.text}",
-            )
-
-    try:
-        content = structure_response.json()["choices"][0]["message"]["content"]
-        parsed = json.loads(content)
-    except (json.JSONDecodeError, KeyError, IndexError) as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Typhoon structuring returned an unparsable response: {exc}",
-        ) from exc
+        parsed = await _structure(http_client, auth_headers, STRUCTURE_PROMPT_PREFIX + ocr_text)
 
     return _normalise_items(parsed)
+
+
+@router.post("/slip")
+async def scan_slip(image: UploadFile = File(...)) -> dict:
+    """Transfer-slip OCR: a slip has no product lines, only who was paid,
+    when, and how much, so it gets its own schema instead of a forced-empty
+    `items` list.
+
+    Returns {"payee", "purchased_at", "amount", "transaction_id"} either
+    way, so callers don't need to know whether OCR_MOCK_MODE is on.
+    """
+    image_bytes = await image.read()
+
+    if OCR_MOCK_MODE:
+        return _normalise_slip(SAMPLE_SLIP)
+
+    if not TYPHOON_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="TYPHOON_API_KEY is not set and OCR_MOCK_MODE is off",
+        )
+
+    auth_headers = {"Authorization": f"Bearer {TYPHOON_API_KEY}"}
+    async with httpx.AsyncClient(timeout=60) as http_client:
+        ocr_text = await _fetch_ocr_text(
+            http_client,
+            auth_headers,
+            image_bytes,
+            image.filename or "slip.jpg",
+            image.content_type or "image/jpeg",
+        )
+        parsed = await _structure(http_client, auth_headers, SLIP_PROMPT_PREFIX + ocr_text)
+
+    return _normalise_slip(parsed)

@@ -49,10 +49,19 @@ interface ScanResponse {
   master_items: MasterItem[];
 }
 
+interface SlipScanResponse {
+  payee: string | null;
+  purchased_at: string | null;
+  amount: number;
+  transaction_id: string | null;
+  /** The store this payee was mapped to on an earlier slip, if any. */
+  suggested_store: string | null;
+}
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3001";
 
 type Status = "idle" | "scanning" | "reviewing" | "saving" | "saved" | "error";
-type Mode = "scan" | "manual";
+type Mode = "scan" | "manual" | "slip";
 
 /** The master item a whole-bill discount is filed under. It's a row in the
  *  same tab as everything else, so it needs a name — but it isn't a price,
@@ -84,6 +93,12 @@ export default function ReceiptReview() {
   const [items, setItems] = useState<ReceiptLineItem[]>([]);
   const [masterItems, setMasterItems] = useState<MasterItem[]>([]);
   const [savedPendingSavingsCount, setSavedPendingSavingsCount] = useState(0);
+  // Set only by a slip scan — the amount actually transferred, which the
+  // entered items must add up to exactly before saving is allowed. null
+  // means "not in slip mode" as much as "not scanned yet".
+  const [slipAmount, setSlipAmount] = useState<number | null>(null);
+  const [slipPayee, setSlipPayee] = useState<string | null>(null);
+  const [slipTransactionId, setSlipTransactionId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -156,6 +171,41 @@ export default function ReceiptReview() {
     }
   }
 
+  async function handleSlipFileSelected(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setStatus("scanning");
+    setErrorMessage(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("image", file);
+      const response = await fetch(`${API_BASE_URL}/receipt/scan-slip`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        throw new Error(`สแกนไม่สำเร็จ (${response.status})`);
+      }
+      const result: SlipScanResponse = await response.json();
+      // No line items yet — a slip carries no product list, only who was
+      // paid and how much. The user builds the items below until they add
+      // up to slipAmount; see the reconciliation gate on canSave.
+      setStore(result.suggested_store ?? result.payee);
+      setPurchasedAt(result.purchased_at ?? today());
+      setSlipAmount(result.amount);
+      setSlipPayee(result.payee);
+      setSlipTransactionId(result.transaction_id);
+      setItems([]);
+      setStatus("reviewing");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ");
+      setStatus("error");
+    }
+  }
+
   function patchItem(id: string, patch: Partial<ReceiptLineItem>) {
     setItems((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   }
@@ -180,15 +230,25 @@ export default function ReceiptReview() {
     setStatus("reviewing");
   }
 
-  const canSave =
-    items.length > 0 &&
-    items.every(
-      (item) => item.masterItemName.trim().length > 0 && parseAmount(item.price) !== null,
-    );
   const total = items.reduce(
     (sum, item) => sum + amountOr0(item.price) * item.quantity - amountOr0(item.discount),
     0,
   );
+  // Slip mode has a real transferred amount to reconcile against; a
+  // fraction of a satang is float noise, not a real shortfall.
+  const remaining = slipAmount !== null ? Math.round((slipAmount - total) * 100) / 100 : null;
+  const reconciled = remaining === null || Math.abs(remaining) < 0.005;
+
+  const canSave =
+    items.length > 0 &&
+    items.every(
+      (item) => item.masterItemName.trim().length > 0 && parseAmount(item.price) !== null,
+    ) &&
+    reconciled;
+  // Slip mode shows the editor as soon as the slip is scanned, even before
+  // any item exists — that's the point of the reconciliation gimmick: the
+  // running "remaining" total is what nudges the user to add lines.
+  const showEditor = items.length > 0 || slipAmount !== null;
 
   async function handleSave() {
     setStatus("saving");
@@ -209,6 +269,9 @@ export default function ReceiptReview() {
             category: item.category,
             paid_from: item.paidFrom,
           })),
+          ...(slipAmount !== null
+            ? { slip: { payee: slipPayee, amount: slipAmount, transaction_id: slipTransactionId } }
+            : {}),
         }),
       });
       if (!response.ok) {
@@ -217,6 +280,9 @@ export default function ReceiptReview() {
       setSavedPendingSavingsCount(items.filter((item) => item.paidFrom === "savings").length);
       setItems([]);
       setStore(null);
+      setSlipAmount(null);
+      setSlipPayee(null);
+      setSlipTransactionId(null);
       setStatus("saved");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ");
@@ -229,7 +295,7 @@ export default function ReceiptReview() {
       <div>
         <h2 className="text-base font-medium">เพิ่มรายจ่าย</h2>
         <p className="text-sm text-slate-400">
-          สแกนสลิปแล้วตรวจทาน หรือกรอกเองทีละรายการ
+          สแกนสลิปรายการสินค้า สแกนสลิปโอนเงิน หรือกรอกเองทีละรายการ
         </p>
       </div>
 
@@ -237,13 +303,24 @@ export default function ReceiptReview() {
         {(
           [
             ["scan", "📷 สแกนสลิป"],
+            ["slip", "🧾 สลิปโอนเงิน"],
             ["manual", "✏️ กรอกเอง"],
           ] as const
         ).map(([value, label]) => (
           <button
             key={value}
             type="button"
-            onClick={() => setMode(value)}
+            onClick={() => {
+              setMode(value);
+              // The reconciliation gate is a slip-mode thing; leaving it
+              // active while working in manual/scan mode would block a
+              // save that has nothing to do with any slip.
+              if (value !== "slip" && slipAmount !== null) {
+                setSlipAmount(null);
+                setSlipPayee(null);
+                setSlipTransactionId(null);
+              }
+            }}
             className={`flex-1 rounded-lg py-2 text-sm ${
               mode === value ? "bg-sky-600" : "bg-slate-800 text-slate-300"
             }`}
@@ -253,25 +330,7 @@ export default function ReceiptReview() {
         ))}
       </div>
 
-      {mode === "scan" ? (
-        <>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={handleFileSelected}
-          />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={status === "scanning" || status === "saving"}
-            className="w-full rounded-lg border border-dashed border-slate-700 py-6 text-sm text-slate-400 disabled:opacity-50"
-          >
-            {status === "scanning" ? "กำลังสแกน..." : "แตะเพื่อถ่าย/เลือกรูปสลิป"}
-          </button>
-        </>
-      ) : (
+      {mode === "manual" ? (
         <button
           type="button"
           onClick={addBlankLine}
@@ -279,6 +338,28 @@ export default function ReceiptReview() {
         >
           ＋ เพิ่มรายการ
         </button>
+      ) : (
+        <>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={mode === "slip" ? handleSlipFileSelected : handleFileSelected}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={status === "scanning" || status === "saving"}
+            className="w-full rounded-lg border border-dashed border-slate-700 py-6 text-sm text-slate-400 disabled:opacity-50"
+          >
+            {status === "scanning"
+              ? "กำลังสแกน..."
+              : mode === "slip"
+                ? "แตะเพื่อถ่าย/เลือกรูปสลิปโอนเงิน"
+                : "แตะเพื่อถ่าย/เลือกรูปสลิป"}
+          </button>
+        </>
       )}
 
       {status === "error" && errorMessage && <p className="text-sm text-red-400">{errorMessage}</p>}
@@ -290,10 +371,33 @@ export default function ReceiptReview() {
         </p>
       )}
 
-      {items.length === 0 ? (
+      {!showEditor ? (
         <p className="text-sm text-slate-500">ยังไม่มีรายการ</p>
       ) : (
         <>
+          {slipAmount !== null && (
+            <div
+              className={`space-y-1 rounded-lg border p-3 text-sm ${
+                reconciled
+                  ? "border-emerald-800 bg-emerald-950/40"
+                  : "border-amber-800 bg-amber-950/40"
+              }`}
+            >
+              <div className="flex items-center justify-between text-slate-400">
+                <span>ยอดสลิป</span>
+                <span className="tabular-nums text-slate-200">{formatMoney(slipAmount)} บาท</span>
+              </div>
+              <div
+                className={`flex items-center justify-between font-medium ${
+                  reconciled ? "text-emerald-400" : "text-amber-400"
+                }`}
+              >
+                <span>คงเหลือที่ยังไม่ลงรายการ</span>
+                <span className="tabular-nums">{formatMoney(remaining ?? 0)} บาท</span>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-2">
             <label className="text-xs text-slate-500">
               ร้าน
@@ -437,7 +541,7 @@ export default function ReceiptReview() {
             onClick={addBlankLine}
             className="w-full rounded-lg border border-slate-800 py-2 text-sm text-slate-400"
           >
-            ＋ เพิ่มรายการที่สลิปอ่านไม่เจอ
+            {mode === "slip" ? "＋ เพิ่มรายการ" : "＋ เพิ่มรายการที่สลิปอ่านไม่เจอ"}
           </button>
 
           <button
@@ -448,11 +552,16 @@ export default function ReceiptReview() {
           >
             {status === "saving" ? "กำลังบันทึก..." : "บันทึก"}
           </button>
-          {!canSave && (
-            <p className="text-center text-xs text-amber-400">
-              ใส่ชื่อสินค้าและราคาให้ครบทุกรายการก่อนบันทึก
-            </p>
-          )}
+          {!canSave &&
+            (!reconciled ? (
+              <p className="text-center text-xs text-amber-400">
+                ลงรายการให้ครบยอดสลิป (คงเหลือ {formatMoney(remaining ?? 0)} บาท) ก่อนถึงจะบันทึกได้
+              </p>
+            ) : (
+              <p className="text-center text-xs text-amber-400">
+                ใส่ชื่อสินค้าและราคาให้ครบทุกรายการก่อนบันทึก
+              </p>
+            ))}
         </>
       )}
     </section>

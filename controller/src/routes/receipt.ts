@@ -5,7 +5,10 @@ import {
   appendMasterItem,
   appendPendingSavingsItem,
   appendPriceHistoryRow,
+  findStoreForPayee,
+  lineTotal,
   readMasterItems,
+  upsertSlipPayeeMapping,
   type ItemCategory,
 } from "../sheets/client";
 
@@ -151,6 +154,55 @@ receiptRouter.get("/master-items", async (_req, res) => {
   res.json({ master_items: await readMasterItems() });
 });
 
+interface SlipOcrResponse {
+  payee: string | null;
+  purchased_at: string | null;
+  amount: number;
+  transaction_id: string | null;
+}
+
+// Scan-slip: OCR a bank transfer slip. Unlike /scan there are no line
+// items to match -- a transfer slip only says who was paid, when, and how
+// much -- so the PWA falls into its manual-entry UI afterwards, pre-filled
+// with the slip's own date and a target total the entered lines have to
+// add up to. `suggested_store` is filled in when this payee has been
+// mapped to a store name before (see upsertSlipPayeeMapping on /confirm).
+receiptRouter.post("/scan-slip", upload.single("image"), async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ error: "image file is required" });
+    return;
+  }
+
+  const ocrForm = new FormData();
+  ocrForm.append(
+    "image",
+    new Blob([new Uint8Array(req.file.buffer)], { type: req.file.mimetype }),
+    req.file.originalname,
+  );
+
+  let ocrResponse: Response;
+  try {
+    ocrResponse = await fetch(`${PYTHON_BACKEND_URL}/ocr/slip`, { method: "POST", body: ocrForm });
+  } catch (error) {
+    res.status(502).json({
+      error: `OCR backend unreachable at ${PYTHON_BACKEND_URL}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    });
+    return;
+  }
+  if (!ocrResponse.ok) {
+    res.status(502).json({ error: `OCR backend returned ${ocrResponse.status}` });
+    return;
+  }
+  const slip = (await ocrResponse.json()) as SlipOcrResponse;
+
+  res.json({
+    ...slip,
+    suggested_store: slip.payee ? await findStoreForPayee(slip.payee) : null,
+  });
+});
+
 interface ConfirmedItem {
   raw_text: string;
   price: number;
@@ -169,6 +221,11 @@ interface ConfirmRequestBody {
   store: string | null;
   purchased_at: string | null;
   items: ConfirmedItem[];
+  /** Present only when this receipt came from a transfer-slip scan: what
+   *  the slip itself said was paid. Lets /confirm check the entered items
+   *  actually add up to the real transfer before writing anything, and
+   *  remember which store this payee maps to for next time. */
+  slip?: { payee: string | null; amount: number };
 }
 
 // Confirm: the user has reviewed every line (matched or freshly named),
@@ -176,7 +233,7 @@ interface ConfirmRequestBody {
 // name that isn't already in the list gets created; every line becomes a
 // PriceHistory row.
 receiptRouter.post("/confirm", async (req, res) => {
-  const { store, purchased_at, items } = req.body as ConfirmRequestBody;
+  const { store, purchased_at, items, slip } = req.body as ConfirmRequestBody;
 
   if (!Array.isArray(items) || items.length === 0) {
     res.status(400).json({ error: "items must be a non-empty array" });
@@ -185,6 +242,20 @@ receiptRouter.post("/confirm", async (req, res) => {
   for (const item of items) {
     if (!item.master_item_name || !item.category) {
       res.status(400).json({ error: "every item needs master_item_name and category" });
+      return;
+    }
+  }
+  if (slip) {
+    const total = items.reduce(
+      (sum, item) =>
+        sum + lineTotal({ price: item.price, quantity: item.quantity ?? 1, discount: item.discount ?? 0 }),
+      0,
+    );
+    // Off by a fraction of a satang is float noise, not a real mismatch.
+    if (Math.round((total - slip.amount) * 100) !== 0) {
+      res.status(400).json({
+        error: `entered items total ${total.toFixed(2)} but the slip transferred ${slip.amount.toFixed(2)}`,
+      });
       return;
     }
   }
@@ -219,6 +290,13 @@ receiptRouter.post("/confirm", async (req, res) => {
       await appendPriceHistoryRow(row);
       priceHistoryRowsWritten += 1;
     }
+  }
+
+  // Remembered after a successful write, not before, so a rejected
+  // reconciliation never teaches the mapping a store name the user didn't
+  // actually confirm.
+  if (slip?.payee && store) {
+    await upsertSlipPayeeMapping(slip.payee, store);
   }
 
   res.json({

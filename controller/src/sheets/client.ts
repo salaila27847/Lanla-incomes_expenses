@@ -620,6 +620,61 @@ export async function deleteRecurringBill(id: string): Promise<boolean> {
   return true;
 }
 
+// --- Slip payees --------------------------------------------------------
+// A transfer slip's registered payee name ("ร้านถุงเงิน (แซ่บเล้ง แอนด์
+// หม่าล่านายเบิร์ด)") is rarely how the user refers to that store
+// elsewhere in the app, so this tab remembers the mapping the first time a
+// slip is confirmed and prefills the store field the next time the same
+// payee shows up. A tab added after the original eight, so a Sheet that
+// predates it has no "SlipPayees" tab yet -- readOptionalRange treats that
+// as zero rows instead of a 500, same as PendingSavings/RecurringBills.
+
+export interface SlipPayeeMapping {
+  payee: string;
+  storeName: string;
+}
+
+const mockSlipPayees: SlipPayeeMapping[] = [];
+
+export async function readSlipPayeeMap(): Promise<SlipPayeeMapping[]> {
+  if (MOCK_MODE) {
+    return mockSlipPayees;
+  }
+  const rows = await readOptionalRange("SlipPayees!A2:B");
+  return rows
+    .filter((row) => row[0])
+    .map((row) => ({ payee: String(row[0]), storeName: String(row[1] ?? "") }));
+}
+
+/** The store name a slip's payee has been recorded as before, or null on a
+ *  payee seen for the first time. Exact match on the trimmed payee text --
+ *  the same slip issuer always prints the same registered name, so nothing
+ *  fuzzier is needed here the way it is for OCR'd product names. */
+export async function findStoreForPayee(payee: string): Promise<string | null> {
+  const trimmed = payee.trim();
+  if (!trimmed) return null;
+  const match = (await readSlipPayeeMap()).find((entry) => entry.payee === trimmed);
+  return match?.storeName ?? null;
+}
+
+export async function upsertSlipPayeeMapping(payee: string, storeName: string): Promise<void> {
+  const trimmedPayee = payee.trim();
+  const trimmedStore = storeName.trim();
+  if (!trimmedPayee || !trimmedStore) return;
+
+  if (MOCK_MODE) {
+    const index = mockSlipPayees.findIndex((entry) => entry.payee === trimmedPayee);
+    const entry = { payee: trimmedPayee, storeName: trimmedStore };
+    if (index === -1) mockSlipPayees.push(entry);
+    else mockSlipPayees[index] = entry;
+    return;
+  }
+
+  const rowNumber = await findRowNumber("SlipPayees!A2:A", trimmedPayee);
+  if (rowNumber === null) await appendRow("SlipPayees!A:B", [trimmedPayee, trimmedStore]);
+  else await updateRange(`SlipPayees!A${rowNumber}:B${rowNumber}`, [trimmedPayee, trimmedStore]);
+}
+
 // --- Cycles -----------------------------------------------------------
 // One row per pay cycle: the payday the user entered (they know the whole
 // year in advance) and the savings-account balance they read off their

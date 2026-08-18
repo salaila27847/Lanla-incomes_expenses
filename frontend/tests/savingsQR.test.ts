@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { groupIncomeByDate } from "../src/pages/SavingsQR";
+import { buildSavingsMovements, groupMovementsByDate } from "../src/pages/SavingsQR";
 
-function entry(id: string, date: string, amount: number) {
+function income(id: string, date: string, amount: number) {
   return {
     id,
     date,
@@ -11,27 +11,70 @@ function entry(id: string, date: string, amount: number) {
   };
 }
 
-describe("groupIncomeByDate", () => {
-  it("returns nothing for an empty list", () => {
-    expect(groupIncomeByDate([])).toEqual([]);
+function withdrawal(id: string, date: string, amount: number) {
+  return {
+    id,
+    date,
+    masterItemName: `item-${id}`,
+    category: "goods" as const,
+    amount,
+    confirmedAt: "2026-08-01T00:00:00.000Z",
+  };
+}
+
+describe("buildSavingsMovements", () => {
+  it("returns nothing for two empty lists", () => {
+    expect(buildSavingsMovements([], [])).toEqual([]);
   });
 
-  it("groups consecutive same-date entries together", () => {
-    const groups = groupIncomeByDate([
-      entry("a", "2026-08-10", 5000),
-      entry("b", "2026-08-10", 200),
-      entry("c", "2026-08-04", 1000),
+  it("tags income as in and withdrawals as out", () => {
+    const movements = buildSavingsMovements([income("a", "2026-08-10", 5000)], [
+      withdrawal("b", "2026-08-04", 200),
     ]);
+
+    expect(movements).toEqual([
+      { id: "income-a", date: "2026-08-10", label: "source-a", amount: 5000, direction: "in" },
+      { id: "withdrawal-b", date: "2026-08-04", label: "item-b", amount: 200, direction: "out" },
+    ]);
+  });
+
+  it("merges both into one newest-first timeline", () => {
+    const movements = buildSavingsMovements(
+      [income("a", "2026-08-04", 1000)],
+      [withdrawal("b", "2026-08-10", 200)],
+    );
+
+    expect(movements.map((m) => m.id)).toEqual(["withdrawal-b", "income-a"]);
+  });
+});
+
+describe("groupMovementsByDate", () => {
+  it("returns nothing for an empty list", () => {
+    expect(groupMovementsByDate([])).toEqual([]);
+  });
+
+  it("groups consecutive same-date movements together, in vs out included", () => {
+    const groups = groupMovementsByDate(
+      buildSavingsMovements(
+        [income("a", "2026-08-10", 5000)],
+        [withdrawal("b", "2026-08-10", 200), withdrawal("c", "2026-08-04", 1000)],
+      ),
+    );
 
     expect(groups).toEqual([
-      { date: "2026-08-10", entries: [entry("a", "2026-08-10", 5000), entry("b", "2026-08-10", 200)] },
-      { date: "2026-08-04", entries: [entry("c", "2026-08-04", 1000)] },
+      {
+        date: "2026-08-10",
+        movements: [
+          { id: "income-a", date: "2026-08-10", label: "source-a", amount: 5000, direction: "in" },
+          { id: "withdrawal-b", date: "2026-08-10", label: "item-b", amount: 200, direction: "out" },
+        ],
+      },
+      {
+        date: "2026-08-04",
+        movements: [
+          { id: "withdrawal-c", date: "2026-08-04", label: "item-c", amount: 1000, direction: "out" },
+        ],
+      },
     ]);
-  });
-
-  it("preserves the caller's order instead of re-sorting", () => {
-    const groups = groupIncomeByDate([entry("a", "2026-08-04", 1000), entry("b", "2026-08-10", 5000)]);
-
-    expect(groups.map((g) => g.date)).toEqual(["2026-08-04", "2026-08-10"]);
   });
 });

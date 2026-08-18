@@ -208,3 +208,192 @@ describe("/qr/pending", () => {
     expect(response.status).toBe(404);
   });
 });
+
+/**
+ * The other settlement path for a pending item: the savings account keeps
+ * the cost permanently (a big item actually saved up for) instead of being
+ * reimbursed by the spending account. Still becomes a normal PriceHistory
+ * row -- price history doesn't care which account paid -- but unlike
+ * /confirm, it also logs a SavingsWithdrawal and lowers the cycle's own
+ * SavingsBalance.
+ */
+describe("/qr/pending/:id/deduct", () => {
+  async function buildAppWithSheets() {
+    vi.resetModules();
+    vi.stubEnv("SHEETS_MOCK_MODE", "true");
+    vi.stubEnv("PYTHON_BACKEND_URL", BACKEND);
+
+    const { qrRouter } = await import("../src/routes/qr");
+    const sheets = await import("../src/sheets/client");
+
+    const app = express();
+    app.use(express.json());
+    app.use("/qr", qrRouter);
+    return { app, sheets };
+  }
+
+  it("writes a PriceHistory row using the item's own purchase date", async () => {
+    const { app, sheets } = await buildAppWithSheets();
+    const pending = await sheets.appendPendingSavingsItem({
+      date: "2026-07-28",
+      store: "Big C",
+      masterItemName: "ตู้เย็น",
+      category: "goods",
+      price: 12000,
+      quantity: 1,
+      discount: 0,
+    });
+
+    const response = await request(app).post(`/qr/pending/${pending.id}/deduct`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ success: true, id: pending.id });
+    expect(await sheets.readPendingSavingsItems()).toHaveLength(0);
+    expect(await sheets.readPriceHistory()).toMatchObject([
+      { date: "2026-07-28", store: "Big C", masterItemName: "ตู้เย็น", price: 12000 },
+    ]);
+  });
+
+  it("logs a SavingsWithdrawal for the item's line total", async () => {
+    const { app, sheets } = await buildAppWithSheets();
+    const pending = await sheets.appendPendingSavingsItem({
+      date: "2026-07-28",
+      store: "Big C",
+      masterItemName: "ตู้เย็น",
+      category: "goods",
+      price: 12000,
+      quantity: 1,
+      discount: 500,
+    });
+
+    await request(app).post(`/qr/pending/${pending.id}/deduct`);
+
+    expect(await sheets.readSavingsWithdrawals()).toMatchObject([
+      { date: "2026-07-28", masterItemName: "ตู้เย็น", category: "goods", amount: 11500 },
+    ]);
+  });
+
+  it("lowers the item's own cycle's savings balance by the line total", async () => {
+    // 28 Jul with no custom paydays configured opens the "2026-08" cycle --
+    // same estimation income.test.ts pins for the same date.
+    const { app, sheets } = await buildAppWithSheets();
+    await sheets.upsertCycleRow({ key: "2026-08", savingsBalance: 20000 });
+    const pending = await sheets.appendPendingSavingsItem({
+      date: "2026-07-28",
+      store: null,
+      masterItemName: "ตู้เย็น",
+      category: "goods",
+      price: 12000,
+      quantity: 1,
+      discount: 0,
+    });
+
+    await request(app).post(`/qr/pending/${pending.id}/deduct`);
+
+    const [cycle] = await sheets.readCycleRows();
+    expect(cycle).toMatchObject({ savingsBalance: 8000 });
+  });
+
+  it("treats an unset savings balance as zero rather than refusing to touch it", async () => {
+    // Unlike money leaving by a route the app never sees, this decrement is
+    // fully known -- the user just confirmed it -- so there's nothing lost
+    // by starting the count from zero on an otherwise-blank cycle.
+    const { app, sheets } = await buildAppWithSheets();
+    const pending = await sheets.appendPendingSavingsItem({
+      date: "2026-07-28",
+      store: null,
+      masterItemName: "ตู้เย็น",
+      category: "goods",
+      price: 12000,
+      quantity: 1,
+      discount: 0,
+    });
+
+    await request(app).post(`/qr/pending/${pending.id}/deduct`);
+
+    const [cycle] = await sheets.readCycleRows();
+    expect(cycle).toMatchObject({ savingsBalance: -12000 });
+  });
+
+  it("404s deducting an id that doesn't exist", async () => {
+    const { app } = await buildAppWithSheets();
+
+    const response = await request(app).post("/qr/pending/does-not-exist/deduct");
+
+    expect(response.status).toBe(404);
+  });
+});
+
+describe("GET /qr/withdrawals", () => {
+  async function buildAppWithSheets() {
+    vi.resetModules();
+    vi.stubEnv("SHEETS_MOCK_MODE", "true");
+    vi.stubEnv("PYTHON_BACKEND_URL", BACKEND);
+
+    const { qrRouter } = await import("../src/routes/qr");
+    const sheets = await import("../src/sheets/client");
+
+    const app = express();
+    app.use(express.json());
+    app.use("/qr", qrRouter);
+    return { app, sheets };
+  }
+
+  it("is empty for a fresh install", async () => {
+    const { app } = await buildAppWithSheets();
+
+    const { body } = await request(app).get("/qr/withdrawals");
+
+    expect(body.withdrawals).toEqual([]);
+  });
+
+  it("returns newest first", async () => {
+    const { app, sheets } = await buildAppWithSheets();
+    await sheets.appendSavingsWithdrawal({
+      date: "2026-06-25",
+      masterItemName: "ก",
+      category: "goods",
+      amount: 1,
+    });
+    await sheets.appendSavingsWithdrawal({
+      date: "2026-08-25",
+      masterItemName: "ข",
+      category: "goods",
+      amount: 3,
+    });
+
+    const { body } = await request(app).get("/qr/withdrawals");
+
+    expect(body.withdrawals.map((w: any) => w.masterItemName)).toEqual(["ข", "ก"]);
+  });
+
+  it("filters by cycle when asked, and returns the cycle's own bounds", async () => {
+    const { app, sheets } = await buildAppWithSheets();
+    await sheets.appendSavingsWithdrawal({
+      date: "2026-06-25",
+      masterItemName: "ก",
+      category: "goods",
+      amount: 1,
+    }); // 2026-07 cycle
+    await sheets.appendSavingsWithdrawal({
+      date: "2026-07-28",
+      masterItemName: "ข",
+      category: "goods",
+      amount: 2,
+    }); // 2026-08 cycle
+
+    const { body } = await request(app).get("/qr/withdrawals?cycle=2026-08");
+
+    expect(body.cycle).toMatchObject({ key: "2026-08" });
+    expect(body.withdrawals).toHaveLength(1);
+    expect(body.withdrawals[0].masterItemName).toBe("ข");
+  });
+
+  it("rejects a malformed cycle key", async () => {
+    const { app } = await buildAppWithSheets();
+
+    const response = await request(app).get("/qr/withdrawals?cycle=not-a-cycle");
+
+    expect(response.status).toBe(400);
+  });
+});

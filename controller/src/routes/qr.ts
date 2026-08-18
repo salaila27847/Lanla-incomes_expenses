@@ -1,11 +1,18 @@
 import { Router } from "express";
+import { cycleContaining, loadCycles } from "../cycleService";
+import { isCycleKey } from "../cycles";
 import { env } from "../env";
 import {
   appendMasterItem,
   appendPriceHistoryRow,
+  appendSavingsWithdrawal,
   deletePendingSavingsItem,
+  lineTotal,
+  readCycleRows,
   readMasterItems,
   readPendingSavingsItems,
+  readSavingsWithdrawals,
+  upsertCycleRow,
 } from "../sheets/client";
 
 export const qrRouter = Router();
@@ -37,20 +44,25 @@ qrRouter.get("/pending", async (_req, res) => {
   res.json({ items: await readPendingSavingsItems() });
 });
 
-qrRouter.post("/pending/:id/confirm", async (req, res) => {
-  const pending = (await readPendingSavingsItems()).find((item) => item.id === req.params.id);
-  if (!pending) {
-    res.status(404).json({ error: "pending savings item not found" });
-    return;
-  }
-
+/** Shared by both settlement paths below: a pending line always becomes a
+ *  real PriceHistory row (same price-history value regardless of which
+ *  account ends up bearing the cost), using the item's own purchase date
+ *  rather than today's — a purchase made near the end of a cycle but
+ *  settled later must stay in the cycle it was actually bought in, or it
+ *  silently jumps to the wrong column. */
+async function settlePendingIntoPriceHistory(pending: {
+  date: string;
+  store: string | null;
+  masterItemName: string;
+  category: "food" | "goods";
+  price: number;
+  quantity: number;
+  discount: number;
+}): Promise<void> {
   const existingNames = new Set((await readMasterItems()).map((mi) => mi.name));
   if (!existingNames.has(pending.masterItemName)) {
     await appendMasterItem(pending.masterItemName, pending.category);
   }
-  // The item's own purchase date, not today — a purchase made near the
-  // end of a cycle but confirmed later must stay in the cycle it was
-  // actually bought in, or it silently jumps to the wrong column.
   await appendPriceHistoryRow({
     date: pending.date,
     store: pending.store,
@@ -60,9 +72,85 @@ qrRouter.post("/pending/:id/confirm", async (req, res) => {
     quantity: pending.quantity,
     discount: pending.discount,
   });
+}
+
+// The spending account pays the savings account back for this line — the
+// QR above is what sends that transfer. Net effect on the savings balance
+// is zero (it fronted the purchase, then got reimbursed), so there's
+// nothing to log for the Savings tab's movement list beyond the
+// PriceHistory row every settlement path writes.
+qrRouter.post("/pending/:id/confirm", async (req, res) => {
+  const pending = (await readPendingSavingsItems()).find((item) => item.id === req.params.id);
+  if (!pending) {
+    res.status(404).json({ error: "pending savings item not found" });
+    return;
+  }
+
+  await settlePendingIntoPriceHistory(pending);
   await deletePendingSavingsItem(pending.id);
 
   res.json({ success: true, id: pending.id });
+});
+
+// The savings account keeps the cost instead of being reimbursed -- a
+// deliberate, permanent drawdown (a big item actually saved up for), not
+// money temporarily fronted. Unlike a savings-tagged Income deposit, this
+// is the one place money leaves the account by a route the app knows
+// about, so it's safe to apply the decrement immediately rather than
+// waiting for the next hand-typed SavingsBalance correction.
+qrRouter.post("/pending/:id/deduct", async (req, res) => {
+  const pending = (await readPendingSavingsItems()).find((item) => item.id === req.params.id);
+  if (!pending) {
+    res.status(404).json({ error: "pending savings item not found" });
+    return;
+  }
+
+  const amount = lineTotal(pending);
+  await settlePendingIntoPriceHistory(pending);
+  await appendSavingsWithdrawal({
+    date: pending.date,
+    masterItemName: pending.masterItemName,
+    category: pending.category,
+    amount,
+  });
+
+  const cycle = await cycleContaining(pending.date);
+  if (cycle) {
+    const existing = (await readCycleRows()).find((row) => row.key === cycle.key);
+    await upsertCycleRow({
+      key: cycle.key,
+      savingsBalance: (existing?.savingsBalance ?? 0) - amount,
+    });
+  }
+
+  await deletePendingSavingsItem(pending.id);
+
+  res.json({ success: true, id: pending.id });
+});
+
+// This cycle's confirmed-as-permanent savings drawdowns, for the Savings
+// tab's movement list -- the "out" half, alongside savings-tagged Income
+// entries as the "in" half.
+qrRouter.get("/withdrawals", async (req, res) => {
+  const cycleKey = typeof req.query.cycle === "string" ? req.query.cycle : null;
+  const withdrawals = await readSavingsWithdrawals();
+
+  if (!cycleKey) {
+    res.json({ withdrawals: [...withdrawals].sort((a, b) => b.date.localeCompare(a.date)) });
+    return;
+  }
+  if (!isCycleKey(cycleKey)) {
+    res.status(400).json({ error: "cycle must look like YYYY-MM" });
+    return;
+  }
+
+  const [cycle] = await loadCycles(cycleKey, cycleKey);
+  res.json({
+    cycle,
+    withdrawals: withdrawals
+      .filter((row) => row.date >= cycle.payday && row.date <= cycle.end)
+      .sort((a, b) => b.date.localeCompare(a.date)),
+  });
 });
 
 // Backing out of a mistaken "pay with savings" tap — the item goes away

@@ -10,7 +10,7 @@ The same file has a `checkTrackerSheet` you can run afterwards: it reads nothing
 
 The rest of this section is the reference for what the script builds (or for doing it by hand).
 
-Create a new Google Sheet with nine tabs, each with an exact header row in row 1:
+Create a new Google Sheet with ten tabs, each with an exact header row in row 1:
 
 **Tab `MasterItems`**
 | Name | Category | CreatedAt |
@@ -101,12 +101,32 @@ left blank is estimated from the nearest one you did enter.
 |----|------|-------|-----------------|----------|-------|----------|-----------|-----------|
 
 A line marked "paid from savings" on the receipt-review screen lands here
-instead of `PriceHistory` — it isn't a recorded expense yet. It moves to
-`PriceHistory` (same columns, same meaning) once the transfer-back QR is
-confirmed on the SavingsQR page, using this row's own `Date` rather than
-the confirmation date, so a purchase near the end of a pay cycle can't jump
-into the wrong one just because it was confirmed later. Confirming or
-cancelling it removes the row from here.
+instead of `PriceHistory` — it isn't a recorded expense yet. It always
+becomes a `PriceHistory` row (same columns, same meaning) once settled on
+the SavingsQR page, using this row's own `Date` rather than the settlement
+date, so a purchase near the end of a pay cycle can't jump into the wrong
+one just because it was settled later. There are two ways to settle it:
+confirming the transfer-back QR (the spending account pays the savings
+account back — `Cycles.SavingsBalance` is unaffected, since the money left
+and came back), or confirming it as a permanent deduction (the savings
+account keeps the cost — see `SavingsWithdrawals` below). Cancelling
+removes the row from here without writing anything.
+
+**Tab `SavingsWithdrawals`**
+| ID | Date | MasterItemName | Category | Amount | ConfirmedAt |
+|----|------|-----------------|----------|--------|-------------|
+
+A permanent record of a `PendingSavings` line settled as a real drawdown —
+money that left the savings account for good (a big item actually saved up
+for), as opposed to the transfer-back path, which nets the balance to
+unchanged. Written automatically when the SavingsQR page's "หักจากบัญชี
+เงินออม" confirmation is used; that same action also lowers the item's own
+cycle's `Cycles.SavingsBalance` by the amount, immediately, the same way a
+savings-tagged `Income` entry raises it — the app was just told about a
+known change, so there's nothing to lose by applying it right away instead
+of waiting for the next hand-typed correction. Exists purely for the
+Savings tab's movement list; it doesn't feed `PriceHistory` or the budget
+caps itself — the `PendingSavings` confirmation already wrote that row.
 
 **Tab `SlipPayees`**
 | PayeeName | StoreName |
@@ -170,4 +190,4 @@ SHEETS_SPREADSHEET_ID=<the ID from step 1>
 SHEETS_MOCK_MODE=false
 ```
 
-Restart the controller. All of `controller/src/sheets/client.ts` (master items, price history, pending savings transfers, must-pay, recurring bills, cycles, slip payees, income, settings) now hits the real Sheet instead of the in-memory mock.
+Restart the controller. All of `controller/src/sheets/client.ts` (master items, price history, pending savings transfers, savings withdrawals, must-pay, recurring bills, cycles, slip payees, income, settings) now hits the real Sheet instead of the in-memory mock.

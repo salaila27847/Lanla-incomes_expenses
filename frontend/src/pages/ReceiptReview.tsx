@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
 import { amountOr0, formatMoney, parseAmount } from "../money";
 import MasterItemPicker, {
   type MasterItem,
@@ -87,14 +86,7 @@ function lineSummary(item: ReceiptLineItem): string {
 }
 
 export default function ReceiptReview() {
-  const [searchParams] = useSearchParams();
-  // A shortcut from the Savings tab lands here as /scan?mode=manual&paidFrom=savings
-  // — pre-selecting the mode and what new lines default to, so paying with
-  // savings doesn't require finding the toggle after the fact.
-  const [mode, setMode] = useState<Mode>(() =>
-    searchParams.get("mode") === "manual" ? "manual" : "scan",
-  );
-  const defaultPaidFrom: PaidFrom = searchParams.get("paidFrom") === "savings" ? "savings" : "spending";
+  const [mode, setMode] = useState<Mode>("scan");
   const [status, setStatus] = useState<Status>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [store, setStore] = useState<string | null>(null);
@@ -155,7 +147,7 @@ export default function ReceiptReview() {
           masterItemName: item.master_item_name ?? "",
           candidates: item.candidates ?? [],
           autoMatched: item.matched,
-          paidFrom: defaultPaidFrom,
+          paidFrom: "spending",
         })),
       );
       // A discount off the whole receipt belongs to no single product, so
@@ -174,7 +166,7 @@ export default function ReceiptReview() {
             masterItemName: BILL_DISCOUNT_NAME,
             candidates: [],
             autoMatched: false,
-            paidFrom: defaultPaidFrom,
+            paidFrom: "spending",
           },
         ]);
       }
@@ -237,24 +229,12 @@ export default function ReceiptReview() {
         masterItemName: "",
         candidates: [],
         autoMatched: false,
-        paidFrom: defaultPaidFrom,
+        paidFrom: "spending",
       },
     ]);
     if (!purchasedAt) setPurchasedAt(today());
     setStatus("reviewing");
   }
-
-  const autoAddedBlankLineRef = useRef(false);
-  useEffect(() => {
-    // The savings-tab shortcut wants the user landing straight in the entry
-    // form, not the empty "ยังไม่มีรายการ" state with one more tap to get
-    // started. Guarded by a ref, not just an empty deps array, because
-    // StrictMode double-invokes mount effects in dev — without the guard
-    // that adds two blank lines instead of one.
-    if (autoAddedBlankLineRef.current) return;
-    autoAddedBlankLineRef.current = true;
-    if (searchParams.get("mode") === "manual") addBlankLine();
-  }, []);
 
   const total = items.reduce(
     (sum, item) => sum + amountOr0(item.price) * item.quantity - amountOr0(item.discount),

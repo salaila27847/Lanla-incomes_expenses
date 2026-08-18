@@ -1,7 +1,7 @@
 /**
  * One-time setup for the Smart Expense & Price Tracker's Google Sheet.
  *
- * Creates any of the nine tabs the controller expects that don't exist yet,
+ * Creates any of the ten tabs the controller expects that don't exist yet,
  * with the exact header row and column formats it reads back.
  *
  * How to run it:
@@ -46,14 +46,28 @@ var TABS = [
   },
   {
     // A line paid straight from the savings account isn't a recorded
-    // expense yet -- it sits here until the transfer-back QR is confirmed
-    // on the SavingsQR page, at which point it moves to PriceHistory using
-    // this row's own Date (not the confirmation date).
+    // expense yet -- it sits here until settled on the SavingsQR page, at
+    // which point it moves to PriceHistory using this row's own Date (not
+    // the settlement date). Settling either transfers the spending
+    // account's money back in (SavingsBalance unaffected) or deducts the
+    // cost from savings permanently (logged to SavingsWithdrawals below).
     name: 'PendingSavings',
     headers: [
       'ID', 'Date', 'Store', 'MasterItemName', 'Category', 'Price', 'Quantity', 'Discount', 'CreatedAt',
     ],
     textColumns: [1, 2, 9], // ID, Date, CreatedAt
+  },
+  {
+    // A permanent record of a PendingSavings line settled as a real
+    // drawdown -- money that left savings for good, unlike the
+    // transfer-back path which nets the balance to unchanged. Written
+    // automatically, alongside lowering that cycle's Cycles.SavingsBalance
+    // by the same amount. Exists purely for the Savings tab's movement
+    // list; PriceHistory already got its row from the PendingSavings
+    // settlement itself.
+    name: 'SavingsWithdrawals',
+    headers: ['ID', 'Date', 'MasterItemName', 'Category', 'Amount', 'ConfirmedAt'],
+    textColumns: [1, 2, 6], // ID, Date, ConfirmedAt
   },
   {
     name: 'MustPay',
@@ -234,7 +248,7 @@ function checkTrackerSheet() {
 
   var summary = problems.length
     ? 'Found ' + problems.length + ' thing(s) to fix:\n\n- ' + problems.join('\n- ')
-    : 'All nine tabs are present and every dated column reads back in the format the app expects.';
+    : 'All ten tabs are present and every dated column reads back in the format the app expects.';
 
   Logger.log(summary);
   SpreadsheetApp.getUi().alert(summary);

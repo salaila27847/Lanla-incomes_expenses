@@ -165,6 +165,22 @@ export interface PendingSavingsItem {
   createdAt: string;
 }
 
+// A permanent record of a savings-paid line settled as a real drawdown --
+// money that left the savings account for good, as opposed to a line
+// settled by transferring the spending account's money back in (which
+// nets the savings balance to unchanged, so there's nothing to log here
+// for that path). Exists purely for the Savings tab's movement list;
+// PendingSavingsItem confirming into a normal PriceHistory row already
+// covers price history for both settlement paths.
+export interface SavingsWithdrawal {
+  id: string;
+  date: string;
+  masterItemName: string;
+  category: ItemCategory;
+  amount: number;
+  confirmedAt: string;
+}
+
 export type MustPayStatus = "unpaid" | "paid";
 
 export interface MustPayItem {
@@ -241,6 +257,7 @@ const mockMasterItems: MasterItem[] = [];
 const mockPriceHistory: PriceHistoryRow[] = [];
 const mockMustPayItems: MustPayItem[] = [];
 const mockPendingSavingsItems: PendingSavingsItem[] = [];
+const mockSavingsWithdrawals: SavingsWithdrawal[] = [];
 const mockRecurringBills: RecurringBill[] = [];
 const mockCycleRows: CycleRow[] = [];
 const mockIncome: IncomeEntry[] = [];
@@ -450,6 +467,51 @@ export async function deletePendingSavingsItem(id: string): Promise<boolean> {
     "", "", "", "", "", "", "", "", "",
   ]);
   return true;
+}
+
+// --- Savings withdrawals ------------------------------------------------
+// A tab added after the original ones, so a Sheet that predates it has no
+// "SavingsWithdrawals" tab yet — readOptionalRange treats that as zero
+// rows instead of a 500, same as PendingSavings.
+
+export async function readSavingsWithdrawals(): Promise<SavingsWithdrawal[]> {
+  if (MOCK_MODE) {
+    return mockSavingsWithdrawals;
+  }
+  const rows = await readOptionalRange("SavingsWithdrawals!A2:F");
+  return rows
+    .filter((row) => row[0])
+    .map((row) => ({
+      id: String(row[0]),
+      date: String(row[1]),
+      masterItemName: String(row[2]),
+      category: row[3] === "goods" ? "goods" : "food",
+      amount: toNumber(row[4]),
+      confirmedAt: String(row[5]),
+    }));
+}
+
+export async function appendSavingsWithdrawal(
+  input: Omit<SavingsWithdrawal, "id" | "confirmedAt">,
+): Promise<SavingsWithdrawal> {
+  const withdrawal: SavingsWithdrawal = {
+    ...input,
+    id: randomUUID(),
+    confirmedAt: new Date().toISOString(),
+  };
+  if (MOCK_MODE) {
+    mockSavingsWithdrawals.push(withdrawal);
+    return withdrawal;
+  }
+  await appendRow("SavingsWithdrawals!A:F", [
+    withdrawal.id,
+    withdrawal.date,
+    withdrawal.masterItemName,
+    withdrawal.category,
+    withdrawal.amount,
+    withdrawal.confirmedAt,
+  ]);
+  return withdrawal;
 }
 
 export async function readMustPayItems(): Promise<MustPayItem[]> {

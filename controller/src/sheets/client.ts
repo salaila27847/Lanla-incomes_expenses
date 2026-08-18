@@ -217,11 +217,18 @@ export interface CycleRow {
   savingsBalance: number | null;
 }
 
+/** Which account an income entry landed in. Defaults to "spending" so every
+ *  caller and every row written before this field existed is unaffected —
+ *  most income is a normal deposit into the spending account, and only a
+ *  deliberate top-up (a bonus, a windfall) is tagged "savings". */
+export type IncomeDestination = "spending" | "savings";
+
 export interface IncomeEntry {
   id: string;
   date: string; // YYYY-MM-DD
   source: string;
   amount: number;
+  destinationAccount: IncomeDestination;
 }
 
 export type SettingsMap = Record<string, string>;
@@ -768,7 +775,9 @@ export async function readIncome(): Promise<IncomeEntry[]> {
   if (MOCK_MODE) {
     return mockIncome;
   }
-  const rows = await readOptionalRange("Income!A2:D");
+  // Column E (destinationAccount) postdates the original four columns, same
+  // blank-means-default handling as RecurringGroupKey/LastBilledCycle.
+  const rows = await readOptionalRange("Income!A2:E");
   return rows
     .filter((row) => row[0])
     .map((row) => ({
@@ -776,6 +785,7 @@ export async function readIncome(): Promise<IncomeEntry[]> {
       date: String(row[1]),
       source: String(row[2]),
       amount: toNumber(row[3]),
+      destinationAccount: row[4] === "savings" ? "savings" : "spending",
     }));
 }
 
@@ -783,13 +793,26 @@ export async function appendIncome(input: {
   date: string;
   source: string;
   amount: number;
+  destinationAccount?: IncomeDestination;
 }): Promise<IncomeEntry> {
-  const entry: IncomeEntry = { id: randomUUID(), ...input };
+  const entry: IncomeEntry = {
+    id: randomUUID(),
+    date: input.date,
+    source: input.source,
+    amount: input.amount,
+    destinationAccount: input.destinationAccount ?? "spending",
+  };
   if (MOCK_MODE) {
     mockIncome.push(entry);
     return entry;
   }
-  await appendRow("Income!A:D", [entry.id, entry.date, entry.source, entry.amount]);
+  await appendRow("Income!A:E", [
+    entry.id,
+    entry.date,
+    entry.source,
+    entry.amount,
+    entry.destinationAccount,
+  ]);
   return entry;
 }
 
@@ -804,7 +827,7 @@ export async function deleteIncome(id: string): Promise<void> {
   // and every read here already skips rows with no ID.
   const rowNumber = await findRowNumber("Income!A2:A", id);
   if (rowNumber === null) return;
-  await updateRange(`Income!A${rowNumber}:D${rowNumber}`, ["", "", "", ""]);
+  await updateRange(`Income!A${rowNumber}:E${rowNumber}`, ["", "", "", "", ""]);
 }
 
 // --- Settings ---------------------------------------------------------

@@ -120,8 +120,20 @@ back to prefill the store field the next time the same payee shows up —
 nothing to fill in by hand.
 
 **Tab `Income`**
-| ID | Date | Source | Amount |
-|----|------|--------|--------|
+| ID | Date | Source | Amount | DestinationAccount |
+|----|------|--------|--------|---------------------|
+
+`DestinationAccount` is `spending` or `savings` — blank reads as `spending`,
+so rows written before this column existed are unaffected. A `savings`
+entry (a bonus, a windfall) rolls straight into that entry's cycle on the
+`Cycles` tab, adding to whatever `SavingsBalance` is already recorded
+there rather than replacing it.
+
+⚠️ **If your Sheet already has this tab**, add the `DestinationAccount`
+column by hand for clarity — `setUpTrackerSheet` never touches a tab that
+already exists. The app reads and writes column E by position regardless
+of whether row 1 labels it, so this is cosmetic; nothing behaves
+differently either way.
 
 **Tab `Settings`**
 | Key | Value |

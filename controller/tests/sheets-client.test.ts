@@ -465,14 +465,14 @@ describe("cycles, income and settings", () => {
 
     await client.deleteIncome("id-2");
 
-    expect(calls.update[0]).toEqual({ range: "Income!A3:D3", values: ["", "", "", ""] });
+    expect(calls.update[0]).toEqual({ range: "Income!A3:E3", values: ["", "", "", "", ""] });
   });
 
   it("skips blanked income rows when reading", async () => {
     const { client } = await loadWithFakeSheets({
-      "Income!A2:D": [
-        ["id-1", "2026-07-25", "เงินเดือน", "25000"],
-        ["", "", "", ""],
+      "Income!A2:E": [
+        ["id-1", "2026-07-25", "เงินเดือน", "25000", "spending"],
+        ["", "", "", "", ""],
       ],
     });
 

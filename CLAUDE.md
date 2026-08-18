@@ -64,7 +64,15 @@ Three rules are load-bearing, and changing any of them silently moves money betw
 
 The food/goods caps are **per cycle**, not per day. An earlier version compared a single day's spend against 5,000 THB, which nothing at this budget could reach; the user's own spreadsheet reads `เป้าหมาย 5,000/เดือน` against actuals of 4,000–6,000 a month.
 
-The dashboard's two balances come from different places on purpose: the **spending** account is derived (`opening_balance` + income − expenses, run forward over *every* cycle on record, not just the displayed year), while the **savings** account is entered by hand per cycle, because money sometimes leaves it directly — which is what the SavingsQR transfer-back flow exists to reverse.
+The dashboard's two balances come from different places on purpose: the **spending** account is derived (`opening_balance` + income − expenses, run forward over *every* cycle on record, not just the displayed year), while the **savings** account is entered by hand per cycle, because money sometimes leaves it directly — which is what the SavingsQR transfer-back flow exists to reverse. A savings-tagged `Income` entry is the one exception that writes to `Cycles.SavingsBalance` automatically rather than waiting for a hand-typed correction — see "Savings deposits" below for why that's safe.
+
+## Savings deposits
+
+Income is a normal deposit into the spending account by default (`IncomeEntry.destinationAccount`, blank/`"spending"` for every entry written before this field existed). Tagging one `"savings"` instead — a bonus, a windfall, a mid-month top-up — rolls it straight into that entry's cycle on `Cycles.SavingsBalance`, adding to whatever's already recorded there (`POST /income` resolves the cycle via `cycleContaining(date)` and adds the amount) rather than making the user go retype the running total by hand.
+
+This looks like it contradicts the "entered by hand" rule for savings above, but it doesn't: that rule exists because money **leaving** the account can happen by a route the app never sees, so it can't be safely derived. Money **arriving** via an `Income` entry has no such blind spot — the user just told the app about it — so folding it in immediately isn't fabricating a number, it's the one case where the app actually knows the delta. The manually-entered figure is still the one that matters when it's next corrected; this only nudges it forward between corrections.
+
+The Dashboard's `+ รายรับ` form carries the spending/savings switch (default spending, matching the field's default). `SavingsQR`'s "เงินเข้าบัญชีออมรอบนี้" section lists this cycle's savings-tagged entries — the "in" half, alongside the pending-transfer list's "out" half — and its "+ เพิ่มรายการที่จ่ายด้วยเงินออม KTB" link is a shortcut into `ReceiptReview`'s existing manual-entry flow (`/scan?mode=manual&paidFrom=savings`), not a second implementation of it: paying with savings still goes through the same pending → transfer-back → confirm path described above, whichever tab it was started from.
 
 ## Savings-sourced purchases
 

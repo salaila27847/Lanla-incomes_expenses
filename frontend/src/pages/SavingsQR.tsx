@@ -1,7 +1,18 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { formatMoney, parseAmount } from "../money";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3001";
+
+const THAI_MONTHS = [
+  "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
+  "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค.",
+];
+
+function shortDate(iso: string): string {
+  const [, month, day] = iso.split("-").map(Number);
+  return `${day} ${THAI_MONTHS[month - 1]}`;
+}
 
 type ItemCategory = "food" | "goods";
 
@@ -17,10 +28,37 @@ interface PendingSavingsItem {
   createdAt: string;
 }
 
+interface IncomeEntry {
+  id: string;
+  date: string;
+  source: string;
+  amount: number;
+  destinationAccount: "spending" | "savings";
+}
+
+interface IncomeDateGroup {
+  date: string;
+  entries: IncomeEntry[];
+}
+
 /** What the line actually cost — same shape as PriceHistory's lineTotal,
  *  since a confirmed pending item becomes exactly that kind of row. */
 function pendingLineTotal(item: PendingSavingsItem): number {
   return item.price * item.quantity - item.discount;
+}
+
+/** Buckets an already-sorted (newest-first) list into consecutive
+ *  same-date runs, same idea as Budget's groupExpensesByDate but for
+ *  income entries rather than expenses — the two shapes don't share
+ *  enough to be worth a shared generic helper for just two call sites. */
+export function groupIncomeByDate(entries: IncomeEntry[]): IncomeDateGroup[] {
+  const groups: IncomeDateGroup[] = [];
+  for (const entry of entries) {
+    const current = groups[groups.length - 1];
+    if (current && current.date === entry.date) current.entries.push(entry);
+    else groups.push({ date: entry.date, entries: [entry] });
+  }
+  return groups;
 }
 
 export default function SavingsQR() {
@@ -33,8 +71,11 @@ export default function SavingsQR() {
   const [activePendingId, setActivePendingId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
+  const [savingsIncome, setSavingsIncome] = useState<IncomeEntry[]>([]);
+
   useEffect(() => {
     loadPending();
+    loadSavingsIncome();
   }, []);
 
   async function loadPending() {
@@ -46,6 +87,26 @@ export default function SavingsQR() {
     } catch {
       // The pending list is a convenience view on top of the manual QR
       // form below — a network hiccup here shouldn't block that.
+    }
+  }
+
+  /** This cycle's income entries tagged straight into savings — the "in"
+   *  half of the picture, alongside the pending list's "out" half. */
+  async function loadSavingsIncome() {
+    try {
+      const budgetResponse = await fetch(`${API_BASE_URL}/budget`);
+      if (!budgetResponse.ok) return;
+      const budget: { cycle: { key: string } | null } = await budgetResponse.json();
+      if (!budget.cycle) return;
+
+      const incomeResponse = await fetch(
+        `${API_BASE_URL}/income?cycle=${budget.cycle.key}`,
+      );
+      if (!incomeResponse.ok) return;
+      const body: { entries: IncomeEntry[] } = await incomeResponse.json();
+      setSavingsIncome(body.entries.filter((entry) => entry.destinationAccount === "savings"));
+    } catch {
+      // Same reasoning as loadPending — a supplementary view, not load-bearing.
     }
   }
 
@@ -128,7 +189,36 @@ export default function SavingsQR() {
         </p>
       </div>
 
+      <Link
+        to="/scan?mode=manual&paidFrom=savings"
+        className="block w-full rounded-lg border border-dashed border-slate-700 py-3 text-center text-sm text-slate-400"
+      >
+        ＋ เพิ่มรายการที่จ่ายด้วยเงินออม KTB
+      </Link>
+
       {errorMessage && <p className="text-sm text-red-400">{errorMessage}</p>}
+
+      {savingsIncome.length > 0 && (
+        <div>
+          <h3 className="text-sm font-medium">เงินเข้าบัญชีออมรอบนี้</h3>
+          <p className="text-xs text-slate-500">รายรับที่เลือกเข้าบัญชีเงินออมแทนบัญชีใช้จ่าย</p>
+          {groupIncomeByDate(savingsIncome).map((group, index) => (
+            <div key={group.date} className={index > 0 ? "mt-3" : "mt-2"}>
+              <p className="text-xs font-medium text-slate-400">{shortDate(group.date)}</p>
+              <ul className="mt-1 divide-y divide-slate-800">
+                {group.entries.map((entry) => (
+                  <li key={entry.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+                    <span className="min-w-0 flex-1 truncate">{entry.source}</span>
+                    <span className="shrink-0 tabular-nums text-emerald-400">
+                      +{formatMoney(entry.amount)} บาท
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
 
       {pendingItems.length > 0 && (
         <div>

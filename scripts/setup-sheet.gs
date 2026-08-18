@@ -94,8 +94,12 @@ var TABS = [
     textColumns: [],
   },
   {
+    // DestinationAccount is "spending" or "savings" -- blank reads as
+    // "spending", so rows written before this column existed are
+    // unaffected. A "savings" entry rolls straight into that cycle's
+    // Cycles.SavingsBalance, adding to whatever's already recorded there.
     name: 'Income',
-    headers: ['ID', 'Date', 'Source', 'Amount'],
+    headers: ['ID', 'Date', 'Source', 'Amount', 'DestinationAccount'],
     textColumns: [2], // Date
   },
   {

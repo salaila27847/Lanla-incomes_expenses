@@ -374,11 +374,16 @@ function TotalRow({
   );
 }
 
+type IncomeDestination = "spending" | "savings";
+
 function IncomePanel({ onSaved }: { onSaved: () => void }) {
   const [sources, setSources] = useState<IncomeSource[]>([]);
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [source, setSource] = useState("");
   const [amount, setAmount] = useState("");
+  // "spending" by default — most income is a normal deposit; the switch is
+  // only for a deliberate top-up (a bonus, a windfall) into savings.
+  const [destination, setDestination] = useState<IncomeDestination>("spending");
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -408,11 +413,17 @@ function IncomePanel({ onSaved }: { onSaved: () => void }) {
       const response = await fetch(`${API_BASE_URL}/income`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date, source: source.trim(), amount: value }),
+        body: JSON.stringify({
+          date,
+          source: source.trim(),
+          amount: value,
+          destination_account: destination,
+        }),
       });
       if (!response.ok) throw new Error(`บันทึกรายรับไม่สำเร็จ (${response.status})`);
       setSource("");
       setAmount("");
+      setDestination("spending");
       onSaved();
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ");
@@ -450,6 +461,16 @@ function IncomePanel({ onSaved }: { onSaved: () => void }) {
         placeholder="จำนวนเงิน (บาท)"
         className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
       />
+      <div className="flex items-center justify-between rounded-lg border border-slate-800 px-3 py-2">
+        <span className="text-sm text-slate-400">
+          {destination === "savings" ? "🐷 เข้าบัญชีเงินออม" : "เข้าบัญชีใช้จ่าย"}
+        </span>
+        <Switch
+          checked={destination === "savings"}
+          onChange={(checked) => setDestination(checked ? "savings" : "spending")}
+          label="เข้าบัญชีเงินออมแทนบัญชีใช้จ่าย"
+        />
+      </div>
       <button
         type="submit"
         disabled={submitting}
@@ -607,5 +628,37 @@ function LabelledInput({
         className="w-32 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-right text-sm"
       />
     </label>
+  );
+}
+
+/** A sliding on/off switch, for a binary choice that isn't really "type a
+ *  value" (unlike LabelledInput above) — e.g. which account a deposit
+ *  lands in. */
+function Switch({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+        checked ? "bg-amber-600" : "bg-slate-700"
+      }`}
+    >
+      <span
+        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+          checked ? "translate-x-6" : "translate-x-1"
+        }`}
+      />
+    </button>
   );
 }

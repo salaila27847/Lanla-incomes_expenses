@@ -33,8 +33,8 @@ describe("buildSavingsMovements", () => {
     ]);
 
     expect(movements).toEqual([
-      { id: "income-a", date: "2026-08-10", label: "source-a", amount: 5000, direction: "in" },
-      { id: "withdrawal-b", date: "2026-08-04", label: "item-b", amount: 200, direction: "out" },
+      { id: "income-a", sourceId: "a", date: "2026-08-10", label: "source-a", amount: 5000, direction: "in" },
+      { id: "withdrawal-b", sourceId: "b", date: "2026-08-04", label: "item-b", amount: 200, direction: "out" },
     ]);
   });
 
@@ -65,14 +65,14 @@ describe("groupMovementsByDate", () => {
       {
         date: "2026-08-10",
         movements: [
-          { id: "income-a", date: "2026-08-10", label: "source-a", amount: 5000, direction: "in" },
-          { id: "withdrawal-b", date: "2026-08-10", label: "item-b", amount: 200, direction: "out" },
+          { id: "income-a", sourceId: "a", date: "2026-08-10", label: "source-a", amount: 5000, direction: "in" },
+          { id: "withdrawal-b", sourceId: "b", date: "2026-08-10", label: "item-b", amount: 200, direction: "out" },
         ],
       },
       {
         date: "2026-08-04",
         movements: [
-          { id: "withdrawal-c", date: "2026-08-04", label: "item-c", amount: 1000, direction: "out" },
+          { id: "withdrawal-c", sourceId: "c", date: "2026-08-04", label: "item-c", amount: 1000, direction: "out" },
         ],
       },
     ]);

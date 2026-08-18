@@ -397,3 +397,129 @@ describe("GET /qr/withdrawals", () => {
     expect(response.status).toBe(400);
   });
 });
+
+/**
+ * Lets the Savings tab's movement list correct or remove a confirmed
+ * "deduct" withdrawal the same way Budget's expense list edits/deletes a
+ * PriceHistory row -- while keeping the cycle's SavingsBalance in step,
+ * since a withdrawal's whole reason for existing is to have moved that
+ * balance in the first place.
+ */
+describe("PUT /qr/withdrawals/:id", () => {
+  async function buildAppWithSheets() {
+    vi.resetModules();
+    vi.stubEnv("SHEETS_MOCK_MODE", "true");
+    vi.stubEnv("PYTHON_BACKEND_URL", BACKEND);
+
+    const { qrRouter } = await import("../src/routes/qr");
+    const sheets = await import("../src/sheets/client");
+
+    const app = express();
+    app.use(express.json());
+    app.use("/qr", qrRouter);
+    return { app, sheets };
+  }
+
+  it("corrects the amount and the balance it had already taken out", async () => {
+    const { app, sheets } = await buildAppWithSheets();
+    await sheets.upsertCycleRow({ key: "2026-08", savingsBalance: 8000 }); // already lowered by 12000
+    const withdrawal = await sheets.appendSavingsWithdrawal({
+      date: "2026-07-28",
+      masterItemName: "ตู้เย็น",
+      category: "goods",
+      amount: 12000,
+    });
+
+    const response = await request(app).put(`/qr/withdrawals/${withdrawal.id}`).send({ amount: 11000 });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ amount: 11000 });
+    const [cycle] = await sheets.readCycleRows();
+    expect(cycle).toMatchObject({ savingsBalance: 9000 });
+  });
+
+  it("rejects a non-positive amount", async () => {
+    const { app, sheets } = await buildAppWithSheets();
+    const withdrawal = await sheets.appendSavingsWithdrawal({
+      date: "2026-07-28",
+      masterItemName: "ตู้เย็น",
+      category: "goods",
+      amount: 12000,
+    });
+
+    const response = await request(app).put(`/qr/withdrawals/${withdrawal.id}`).send({ amount: 0 });
+
+    expect(response.status).toBe(400);
+  });
+
+  it("404s updating an id that doesn't exist", async () => {
+    const { app } = await buildAppWithSheets();
+
+    const response = await request(app).put("/qr/withdrawals/does-not-exist").send({ amount: 100 });
+
+    expect(response.status).toBe(404);
+  });
+});
+
+describe("DELETE /qr/withdrawals/:id", () => {
+  async function buildAppWithSheets() {
+    vi.resetModules();
+    vi.stubEnv("SHEETS_MOCK_MODE", "true");
+    vi.stubEnv("PYTHON_BACKEND_URL", BACKEND);
+
+    const { qrRouter } = await import("../src/routes/qr");
+    const sheets = await import("../src/sheets/client");
+
+    const app = express();
+    app.use(express.json());
+    app.use("/qr", qrRouter);
+    return { app, sheets };
+  }
+
+  it("removes the withdrawal and credits its amount back onto the cycle balance", async () => {
+    const { app, sheets } = await buildAppWithSheets();
+    await sheets.upsertCycleRow({ key: "2026-08", savingsBalance: 8000 }); // already lowered by 12000
+    const withdrawal = await sheets.appendSavingsWithdrawal({
+      date: "2026-07-28",
+      masterItemName: "ตู้เย็น",
+      category: "goods",
+      amount: 12000,
+    });
+
+    const response = await request(app).delete(`/qr/withdrawals/${withdrawal.id}`);
+
+    expect(response.status).toBe(200);
+    expect(await sheets.readSavingsWithdrawals()).toHaveLength(0);
+    const [cycle] = await sheets.readCycleRows();
+    expect(cycle).toMatchObject({ savingsBalance: 20000 });
+  });
+
+  it("leaves the PriceHistory row the original /deduct call wrote untouched", async () => {
+    // Price history doesn't care which account ended up paying -- deleting
+    // the withdrawal record only undoes its own account-level bookkeeping.
+    const { app, sheets } = await buildAppWithSheets();
+    const pending = await sheets.appendPendingSavingsItem({
+      date: "2026-07-28",
+      store: null,
+      masterItemName: "ตู้เย็น",
+      category: "goods",
+      price: 12000,
+      quantity: 1,
+      discount: 0,
+    });
+    await request(app).post(`/qr/pending/${pending.id}/deduct`);
+    const [withdrawal] = await sheets.readSavingsWithdrawals();
+
+    await request(app).delete(`/qr/withdrawals/${withdrawal.id}`);
+
+    expect(await sheets.readPriceHistory()).toHaveLength(1);
+  });
+
+  it("404s deleting an id that doesn't exist", async () => {
+    const { app } = await buildAppWithSheets();
+
+    const response = await request(app).delete("/qr/withdrawals/does-not-exist");
+
+    expect(response.status).toBe(404);
+  });
+});

@@ -6,7 +6,7 @@
  * the user's recorded paydays into actual date ranges.
  */
 import { buildCycleRange, cycleForDate, type Cycle } from "./cycles";
-import { readCycleRows, type CycleRow } from "./sheets/client";
+import { readCycleRows, upsertCycleRow, type CycleRow } from "./sheets/client";
 
 export async function loadCycles(fromKey: string, toKey: string): Promise<Cycle[]> {
   const rows = await readCycleRows();
@@ -29,4 +29,19 @@ export async function loadCycles(fromKey: string, toKey: string): Promise<Cycle[
 export async function cycleContaining(date: string): Promise<Cycle | null> {
   const year = Number(date.slice(0, 4));
   return cycleForDate(date, await loadCycles(`${year - 1}-12`, `${year + 1}-01`));
+}
+
+/**
+ * Nudges the cycle containing `date`'s SavingsBalance by `delta` (positive
+ * or negative). Shared by every place that folds a fully-known change into
+ * the balance immediately instead of waiting for the next hand-typed
+ * correction: a savings-tagged Income deposit (and its edit/delete), and a
+ * confirmed "deduct" settlement (and its edit/delete). A no-op if the date
+ * falls outside every recorded cycle.
+ */
+export async function adjustSavingsBalance(date: string, delta: number): Promise<void> {
+  const cycle = await cycleContaining(date);
+  if (!cycle) return;
+  const existing = (await readCycleRows()).find((row) => row.key === cycle.key);
+  await upsertCycleRow({ key: cycle.key, savingsBalance: (existing?.savingsBalance ?? 0) + delta });
 }

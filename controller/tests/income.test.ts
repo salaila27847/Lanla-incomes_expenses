@@ -227,4 +227,99 @@ describe("DELETE /income/:id", () => {
     expect(response.status).toBe(200);
     expect(await sheets.readIncome()).toHaveLength(1);
   });
+
+  // Reverses what POST /income folded into the balance on the way in --
+  // otherwise deleting a savings-tagged entry would leave the balance
+  // permanently inflated by an amount that no longer exists anywhere.
+  it("credits a savings-tagged entry's amount back off that cycle's balance", async () => {
+    const { app, sheets } = await buildApp();
+    await sheets.upsertCycleRow({ key: "2026-08", savingsBalance: 5000 });
+    const entry = await sheets.appendIncome({
+      date: "2026-07-25",
+      source: "โบนัส",
+      amount: 5000,
+      destinationAccount: "savings",
+    });
+
+    await request(app).delete(`/income/${entry.id}`);
+
+    const [cycle] = await sheets.readCycleRows();
+    expect(cycle).toMatchObject({ savingsBalance: 0 });
+  });
+
+  it("leaves the cycle balance alone when the entry was a spending deposit", async () => {
+    const { app, sheets } = await buildApp();
+    await sheets.upsertCycleRow({ key: "2026-08", savingsBalance: 5000 });
+    const entry = await sheets.appendIncome({ date: "2026-07-25", source: "เงินเดือน", amount: 25000 });
+
+    await request(app).delete(`/income/${entry.id}`);
+
+    const [cycle] = await sheets.readCycleRows();
+    expect(cycle).toMatchObject({ savingsBalance: 5000 });
+  });
+});
+
+describe("PUT /income/:id", () => {
+  it("updates the source and amount", async () => {
+    const { app, sheets } = await buildApp();
+    const entry = await sheets.appendIncome({ date: "2026-07-25", source: "เงินเดือน", amount: 25000 });
+
+    const response = await request(app).put(`/income/${entry.id}`).send({ source: "โบนัส", amount: 500 });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ source: "โบนัส", amount: 500, date: "2026-07-25" });
+  });
+
+  it("adjusts a savings-tagged entry's cycle balance by the amount's delta", async () => {
+    const { app, sheets } = await buildApp();
+    await sheets.upsertCycleRow({ key: "2026-08", savingsBalance: 5000 });
+    const entry = await sheets.appendIncome({
+      date: "2026-07-25",
+      source: "โบนัส",
+      amount: 5000,
+      destinationAccount: "savings",
+    });
+
+    await request(app).put(`/income/${entry.id}`).send({ amount: 3000 });
+
+    const [cycle] = await sheets.readCycleRows();
+    expect(cycle).toMatchObject({ savingsBalance: 3000 });
+  });
+
+  it("does not touch the cycle balance for a spending entry", async () => {
+    const { app, sheets } = await buildApp();
+    await sheets.upsertCycleRow({ key: "2026-08", savingsBalance: 5000 });
+    const entry = await sheets.appendIncome({ date: "2026-07-25", source: "เงินเดือน", amount: 25000 });
+
+    await request(app).put(`/income/${entry.id}`).send({ amount: 100 });
+
+    const [cycle] = await sheets.readCycleRows();
+    expect(cycle).toMatchObject({ savingsBalance: 5000 });
+  });
+
+  it("rejects an empty body", async () => {
+    const { app, sheets } = await buildApp();
+    const entry = await sheets.appendIncome({ date: "2026-07-25", source: "เงินเดือน", amount: 25000 });
+
+    const response = await request(app).put(`/income/${entry.id}`).send({});
+
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a non-positive amount", async () => {
+    const { app, sheets } = await buildApp();
+    const entry = await sheets.appendIncome({ date: "2026-07-25", source: "เงินเดือน", amount: 25000 });
+
+    const response = await request(app).put(`/income/${entry.id}`).send({ amount: 0 });
+
+    expect(response.status).toBe(400);
+  });
+
+  it("404s updating an id that doesn't exist", async () => {
+    const { app } = await buildApp();
+
+    const response = await request(app).put("/income/does-not-exist").send({ amount: 100 });
+
+    expect(response.status).toBe(404);
+  });
 });

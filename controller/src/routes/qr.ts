@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { cycleContaining, loadCycles } from "../cycleService";
+import { adjustSavingsBalance, loadCycles } from "../cycleService";
 import { isCycleKey } from "../cycles";
 import { env } from "../env";
 import {
@@ -7,12 +7,12 @@ import {
   appendPriceHistoryRow,
   appendSavingsWithdrawal,
   deletePendingSavingsItem,
+  deleteSavingsWithdrawal,
   lineTotal,
-  readCycleRows,
   readMasterItems,
   readPendingSavingsItems,
   readSavingsWithdrawals,
-  upsertCycleRow,
+  updateSavingsWithdrawal,
 } from "../sheets/client";
 
 export const qrRouter = Router();
@@ -113,16 +113,7 @@ qrRouter.post("/pending/:id/deduct", async (req, res) => {
     category: pending.category,
     amount,
   });
-
-  const cycle = await cycleContaining(pending.date);
-  if (cycle) {
-    const existing = (await readCycleRows()).find((row) => row.key === cycle.key);
-    await upsertCycleRow({
-      key: cycle.key,
-      savingsBalance: (existing?.savingsBalance ?? 0) - amount,
-    });
-  }
-
+  await adjustSavingsBalance(pending.date, -amount);
   await deletePendingSavingsItem(pending.id);
 
   res.json({ success: true, id: pending.id });
@@ -151,6 +142,47 @@ qrRouter.get("/withdrawals", async (req, res) => {
       .filter((row) => row.date >= cycle.payday && row.date <= cycle.end)
       .sort((a, b) => b.date.localeCompare(a.date)),
   });
+});
+
+// Only the amount is editable — see the note on updateSavingsWithdrawal.
+// Raising or lowering it moves the same amount, in the opposite direction,
+// off the cycle's SavingsBalance: the withdrawal took that much out, so
+// correcting the figure corrects how much was taken.
+qrRouter.put("/withdrawals/:id", async (req, res) => {
+  const { amount } = req.body as { amount?: unknown };
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+    res.status(400).json({ error: "amount must be a positive number" });
+    return;
+  }
+
+  const existing = (await readSavingsWithdrawals()).find((row) => row.id === req.params.id);
+  if (!existing) {
+    res.status(404).json({ error: "savings withdrawal not found" });
+    return;
+  }
+
+  const updated = await updateSavingsWithdrawal(req.params.id, { amount });
+  if (amount !== existing.amount) {
+    await adjustSavingsBalance(existing.date, existing.amount - amount);
+  }
+
+  res.json(updated);
+});
+
+// Deleting a withdrawal only undoes its own bookkeeping -- crediting the
+// amount back onto the cycle's SavingsBalance and dropping it from the
+// movement list. It does not touch the PriceHistory row the original
+// /deduct call wrote: per the Savings-sourced-purchases model, price
+// history doesn't care which account ended up paying, so that expense
+// stands regardless of whether this withdrawal record is kept.
+qrRouter.delete("/withdrawals/:id", async (req, res) => {
+  const deleted = await deleteSavingsWithdrawal(req.params.id);
+  if (!deleted) {
+    res.status(404).json({ error: "savings withdrawal not found" });
+    return;
+  }
+  await adjustSavingsBalance(deleted.date, deleted.amount);
+  res.json({ success: true, id: req.params.id });
 });
 
 // Backing out of a mistaken "pay with savings" tap — the item goes away

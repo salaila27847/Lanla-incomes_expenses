@@ -46,6 +46,10 @@ interface SavingsWithdrawal {
 
 interface SavingsMovement {
   id: string;
+  /** The underlying Income or SavingsWithdrawal row's own id -- what an
+   *  edit or delete actually targets, as opposed to `id` above, which is
+   *  only unique within this merged list. */
+  sourceId: string;
   date: string;
   label: string;
   amount: number;
@@ -73,6 +77,7 @@ export function buildSavingsMovements(
 ): SavingsMovement[] {
   const inMovements: SavingsMovement[] = income.map((entry) => ({
     id: `income-${entry.id}`,
+    sourceId: entry.id,
     date: entry.date,
     label: entry.source,
     amount: entry.amount,
@@ -80,6 +85,7 @@ export function buildSavingsMovements(
   }));
   const outMovements: SavingsMovement[] = withdrawals.map((withdrawal) => ({
     id: `withdrawal-${withdrawal.id}`,
+    sourceId: withdrawal.id,
     date: withdrawal.date,
     label: withdrawal.masterItemName,
     amount: withdrawal.amount,
@@ -115,6 +121,10 @@ export default function SavingsQR() {
   );
 
   const [movements, setMovements] = useState<SavingsMovement[]>([]);
+  const [editingMovement, setEditingMovement] = useState<{
+    sourceId: string;
+    direction: "in" | "out";
+  } | null>(null);
 
   useEffect(() => {
     loadPending();
@@ -250,6 +260,46 @@ export default function SavingsQR() {
     }
   }
 
+  /** "in" movements are savings-tagged Income entries; "out" are confirmed
+   *  SavingsWithdrawals -- two different tabs, so editing/deleting one
+   *  targets a different route than the other. */
+  function movementUrl(movement: SavingsMovement): string {
+    return movement.direction === "in"
+      ? `${API_BASE_URL}/income/${encodeURIComponent(movement.sourceId)}`
+      : `${API_BASE_URL}/qr/withdrawals/${encodeURIComponent(movement.sourceId)}`;
+  }
+
+  async function saveMovement(movement: SavingsMovement, amount: number) {
+    setErrorMessage(null);
+    try {
+      const response = await fetch(movementUrl(movement), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error ?? `แก้ไขไม่สำเร็จ (${response.status})`);
+      }
+      setEditingMovement(null);
+      await loadMovements();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ");
+    }
+  }
+
+  async function deleteMovement(movement: SavingsMovement) {
+    setErrorMessage(null);
+    try {
+      const response = await fetch(movementUrl(movement), { method: "DELETE" });
+      if (!response.ok) throw new Error(`ลบไม่สำเร็จ (${response.status})`);
+      setEditingMovement(null);
+      await loadMovements();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ");
+    }
+  }
+
   return (
     <section className="space-y-6">
       <div>
@@ -260,35 +310,6 @@ export default function SavingsQR() {
       </div>
 
       {errorMessage && <p className="text-sm text-red-400">{errorMessage}</p>}
-
-      {movements.length > 0 && (
-        <div>
-          <h3 className="text-sm font-medium">รายการเคลื่อนไหวบัญชีออมรอบนี้</h3>
-          {groupMovementsByDate(movements).map((group, index) => (
-            <div key={group.date} className={index > 0 ? "mt-3" : "mt-2"}>
-              <p className="text-xs font-medium text-slate-400">{shortDate(group.date)}</p>
-              <ul className="mt-1 divide-y divide-slate-800">
-                {group.movements.map((movement) => (
-                  <li
-                    key={movement.id}
-                    className="flex items-center justify-between gap-2 py-2 text-sm"
-                  >
-                    <span className="min-w-0 flex-1 truncate">{movement.label}</span>
-                    <span
-                      className={`shrink-0 tabular-nums ${
-                        movement.direction === "in" ? "text-emerald-400" : "text-red-400"
-                      }`}
-                    >
-                      {movement.direction === "in" ? "+" : "−"}
-                      {formatMoney(movement.amount)} บาท
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      )}
 
       {pendingItems.length > 0 && (
         <div>
@@ -406,6 +427,101 @@ export default function SavingsQR() {
           <img src={qrDataUrl} alt="PromptPay QR" className="mx-auto" />
         </div>
       )}
+
+      {movements.length > 0 && (
+        <div>
+          <h3 className="text-sm font-medium">รายการเคลื่อนไหวบัญชีออมรอบนี้</h3>
+          <p className="text-xs text-slate-500">แตะที่รายการเพื่อแก้ไขหรือลบ</p>
+          {groupMovementsByDate(movements).map((group, index) => (
+            <div key={group.date} className={index > 0 ? "mt-3" : "mt-2"}>
+              <p className="text-xs font-medium text-slate-400">{shortDate(group.date)}</p>
+              <ul className="mt-1 divide-y divide-slate-800">
+                {group.movements.map((movement) =>
+                  editingMovement?.sourceId === movement.sourceId &&
+                  editingMovement.direction === movement.direction ? (
+                    <MovementEditor
+                      key={movement.id}
+                      movement={movement}
+                      onCancel={() => setEditingMovement(null)}
+                      onSave={(amount) => saveMovement(movement, amount)}
+                      onDelete={() => deleteMovement(movement)}
+                    />
+                  ) : (
+                    <li key={movement.id}>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditingMovement({ sourceId: movement.sourceId, direction: movement.direction })
+                        }
+                        className="flex w-full items-center justify-between gap-2 py-2 text-left text-sm"
+                      >
+                        <span className="min-w-0 flex-1 truncate">{movement.label}</span>
+                        <span
+                          className={`shrink-0 tabular-nums ${
+                            movement.direction === "in" ? "text-emerald-400" : "text-red-400"
+                          }`}
+                        >
+                          {movement.direction === "in" ? "+" : "−"}
+                          {formatMoney(movement.amount)} บาท
+                        </span>
+                      </button>
+                    </li>
+                  ),
+                )}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
     </section>
+  );
+}
+
+/** Inline editor for one movement -- amount only, the same scope as
+ *  Budget's ExpenseEditor, which never offers to rename the item either. */
+function MovementEditor({
+  movement,
+  onSave,
+  onCancel,
+  onDelete,
+}: {
+  movement: SavingsMovement;
+  onSave: (amount: number) => void;
+  onCancel: () => void;
+  onDelete: () => void;
+}) {
+  const [amount, setAmount] = useState(String(movement.amount));
+
+  return (
+    <li className="space-y-2 py-3">
+      <p className="text-sm">{movement.label}</p>
+      <input
+        value={amount}
+        onChange={(event) => setAmount(event.target.value)}
+        inputMode="decimal"
+        aria-label="จำนวนเงิน"
+        className="w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-right text-sm"
+      />
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={onDelete}
+          className="rounded-lg border border-red-900 px-3 py-2 text-sm text-red-400"
+        >
+          ลบ
+        </button>
+        <button type="button" onClick={onCancel} className="flex-1 rounded-lg bg-slate-800 py-2 text-sm">
+          ยกเลิก
+        </button>
+        <button
+          type="button"
+          disabled={parseAmount(amount) === null || (parseAmount(amount) ?? 0) <= 0}
+          onClick={() => onSave(parseAmount(amount) ?? 0)}
+          className="flex-1 rounded-lg bg-sky-600 py-2 text-sm disabled:opacity-50"
+        >
+          บันทึก
+        </button>
+      </div>
+    </li>
   );
 }

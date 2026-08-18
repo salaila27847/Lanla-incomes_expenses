@@ -491,6 +491,17 @@ export async function readSavingsWithdrawals(): Promise<SavingsWithdrawal[]> {
     }));
 }
 
+function savingsWithdrawalValues(withdrawal: SavingsWithdrawal): unknown[] {
+  return [
+    withdrawal.id,
+    withdrawal.date,
+    withdrawal.masterItemName,
+    withdrawal.category,
+    withdrawal.amount,
+    withdrawal.confirmedAt,
+  ];
+}
+
 export async function appendSavingsWithdrawal(
   input: Omit<SavingsWithdrawal, "id" | "confirmedAt">,
 ): Promise<SavingsWithdrawal> {
@@ -503,15 +514,50 @@ export async function appendSavingsWithdrawal(
     mockSavingsWithdrawals.push(withdrawal);
     return withdrawal;
   }
-  await appendRow("SavingsWithdrawals!A:F", [
-    withdrawal.id,
-    withdrawal.date,
-    withdrawal.masterItemName,
-    withdrawal.category,
-    withdrawal.amount,
-    withdrawal.confirmedAt,
-  ]);
+  await appendRow("SavingsWithdrawals!A:F", savingsWithdrawalValues(withdrawal));
   return withdrawal;
+}
+
+// Only the amount is editable — the movement list on the Savings tab is the
+// one place this is surfaced, and it only ever shows the amount, the same
+// way Budget's inline expense editor never offers to rename the item.
+export async function updateSavingsWithdrawal(
+  id: string,
+  updates: { amount: number },
+): Promise<SavingsWithdrawal | null> {
+  const existing = (await readSavingsWithdrawals()).find((row) => row.id === id);
+  if (!existing) return null;
+  const merged: SavingsWithdrawal = { ...existing, amount: updates.amount };
+
+  if (MOCK_MODE) {
+    const index = mockSavingsWithdrawals.findIndex((row) => row.id === id);
+    if (index !== -1) mockSavingsWithdrawals[index] = merged;
+    return merged;
+  }
+
+  const rowNumber = await findRowNumber("SavingsWithdrawals!A2:A", id);
+  if (rowNumber === null) return null;
+  await updateRange(`SavingsWithdrawals!A${rowNumber}:F${rowNumber}`, savingsWithdrawalValues(merged));
+  return merged;
+}
+
+/** Returns the deleted row (the caller needs its date and amount to reverse
+ *  the cycle balance this drawdown lowered), or null if it was already gone. */
+export async function deleteSavingsWithdrawal(id: string): Promise<SavingsWithdrawal | null> {
+  if (MOCK_MODE) {
+    const index = mockSavingsWithdrawals.findIndex((row) => row.id === id);
+    if (index === -1) return null;
+    const [removed] = mockSavingsWithdrawals.splice(index, 1);
+    return removed;
+  }
+
+  const existing = (await readSavingsWithdrawals()).find((row) => row.id === id) ?? null;
+  // Located by id independently of `existing` above so a delete still
+  // succeeds even if that lookup came back empty — see deleteIncome.
+  const rowNumber = await findRowNumber("SavingsWithdrawals!A2:A", id);
+  if (rowNumber === null) return existing;
+  await updateRange(`SavingsWithdrawals!A${rowNumber}:F${rowNumber}`, ["", "", "", "", "", ""]);
+  return existing;
 }
 
 export async function readMustPayItems(): Promise<MustPayItem[]> {
@@ -851,6 +897,10 @@ export async function readIncome(): Promise<IncomeEntry[]> {
     }));
 }
 
+function incomeValues(entry: IncomeEntry): unknown[] {
+  return [entry.id, entry.date, entry.source, entry.amount, entry.destinationAccount];
+}
+
 export async function appendIncome(input: {
   date: string;
   source: string;
@@ -868,28 +918,58 @@ export async function appendIncome(input: {
     mockIncome.push(entry);
     return entry;
   }
-  await appendRow("Income!A:E", [
-    entry.id,
-    entry.date,
-    entry.source,
-    entry.amount,
-    entry.destinationAccount,
-  ]);
+  await appendRow("Income!A:E", incomeValues(entry));
   return entry;
 }
 
-export async function deleteIncome(id: string): Promise<void> {
+// Date and destinationAccount stay fixed — changing either would move the
+// entry to a different cycle or account, which the Savings tab's inline
+// editor (the one caller of this today) never asks for; it only ever
+// corrects the source name or the amount.
+export async function updateIncome(
+  id: string,
+  updates: { source?: string; amount?: number },
+): Promise<IncomeEntry | null> {
+  const existing = (await readIncome()).find((entry) => entry.id === id);
+  if (!existing) return null;
+  const merged: IncomeEntry = {
+    ...existing,
+    source: updates.source ?? existing.source,
+    amount: updates.amount ?? existing.amount,
+  };
+
   if (MOCK_MODE) {
     const index = mockIncome.findIndex((entry) => entry.id === id);
-    if (index !== -1) mockIncome.splice(index, 1);
-    return;
+    if (index !== -1) mockIncome[index] = merged;
+    return merged;
   }
+
+  const rowNumber = await findRowNumber("Income!A2:A", id);
+  if (rowNumber === null) return null;
+  await updateRange(`Income!A${rowNumber}:E${rowNumber}`, incomeValues(merged));
+  return merged;
+}
+
+/** Returns the deleted entry (the caller needs its amount and
+ *  destinationAccount to reverse a savings-balance credit), or null if it
+ *  was already gone. */
+export async function deleteIncome(id: string): Promise<IncomeEntry | null> {
+  if (MOCK_MODE) {
+    const index = mockIncome.findIndex((entry) => entry.id === id);
+    if (index === -1) return null;
+    const [removed] = mockIncome.splice(index, 1);
+    return removed;
+  }
+  const existing = (await readIncome()).find((entry) => entry.id === id) ?? null;
   // Blanking the row rather than removing it: deleting a row needs
   // batchUpdate + the tab's numeric sheetId, a whole second API surface,
-  // and every read here already skips rows with no ID.
+  // and every read here already skips rows with no ID. Located by id
+  // independently of `existing` above so a delete still succeeds even if
+  // that lookup came back empty.
   const rowNumber = await findRowNumber("Income!A2:A", id);
-  if (rowNumber === null) return;
+  if (rowNumber === null) return existing;
   await updateRange(`Income!A${rowNumber}:E${rowNumber}`, ["", "", "", "", ""]);
+  return existing;
 }
 
 // --- Settings ---------------------------------------------------------

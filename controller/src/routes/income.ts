@@ -1,12 +1,11 @@
 import { Router } from "express";
-import { cycleContaining, loadCycles } from "../cycleService";
+import { adjustSavingsBalance, loadCycles } from "../cycleService";
 import { isCycleKey, isDate } from "../cycles";
 import {
   appendIncome,
   deleteIncome,
-  readCycleRows,
   readIncome,
-  upsertCycleRow,
+  updateIncome,
   type IncomeDestination,
 } from "../sheets/client";
 
@@ -93,20 +92,51 @@ incomeRouter.post("/", async (req, res) => {
   // in, so there's nothing to lose by folding it in immediately instead of
   // making the user go retype the running total by hand.
   if (destinationAccount === "savings") {
-    const cycle = await cycleContaining(date);
-    if (cycle) {
-      const existing = (await readCycleRows()).find((row) => row.key === cycle.key);
-      await upsertCycleRow({
-        key: cycle.key,
-        savingsBalance: (existing?.savingsBalance ?? 0) + amount,
-      });
-    }
+    await adjustSavingsBalance(date, amount);
   }
 
   res.status(201).json(entry);
 });
 
+// Only source and amount are editable -- date and destinationAccount would
+// move the entry to a different cycle or account, which the Savings tab's
+// inline movement editor (the one caller of this today) never offers.
+incomeRouter.put("/:id", async (req, res) => {
+  const { source, amount } = req.body as { source?: unknown; amount?: unknown };
+  if (source === undefined && amount === undefined) {
+    res.status(400).json({ error: "nothing to update" });
+    return;
+  }
+  if (source !== undefined && (typeof source !== "string" || !source.trim())) {
+    res.status(400).json({ error: "source must not be empty" });
+    return;
+  }
+  if (amount !== undefined && (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0)) {
+    res.status(400).json({ error: "amount must be a positive number" });
+    return;
+  }
+
+  const existing = (await readIncome()).find((entry) => entry.id === req.params.id);
+  if (!existing) {
+    res.status(404).json({ error: "income entry not found" });
+    return;
+  }
+
+  const updated = await updateIncome(req.params.id, {
+    source: typeof source === "string" ? source.trim() : undefined,
+    amount: typeof amount === "number" ? amount : undefined,
+  });
+  if (existing.destinationAccount === "savings" && typeof amount === "number" && amount !== existing.amount) {
+    await adjustSavingsBalance(existing.date, amount - existing.amount);
+  }
+
+  res.json(updated);
+});
+
 incomeRouter.delete("/:id", async (req, res) => {
-  await deleteIncome(req.params.id);
+  const deleted = await deleteIncome(req.params.id);
+  if (deleted?.destinationAccount === "savings") {
+    await adjustSavingsBalance(deleted.date, -deleted.amount);
+  }
   res.json({ success: true, id: req.params.id });
 });

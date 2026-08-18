@@ -1,4 +1,9 @@
 import "dotenv/config";
+// Must load before any router: it patches Express so a rejected promise
+// inside an async route handler reaches the error middleware below instead
+// of leaving the request hanging forever with no response — Express 4
+// (unlike 5) does not do this on its own.
+import "express-async-errors";
 import cors from "cors";
 import express from "express";
 import { budgetRouter } from "./routes/budget";
@@ -23,6 +28,20 @@ app.use("/dashboard", dashboardRouter);
 app.use("/income", incomeRouter);
 app.use("/expenses", expensesRouter);
 app.use("/qr", qrRouter);
+
+// Last middleware: anything a route threw or its promise rejected with
+// (a Sheets API error, most often — e.g. a tab from SETUP.md the user's
+// real Sheet doesn't have yet) lands here instead of hanging the request.
+// The message is forwarded as-is, same as every route's own 400s already
+// do — this is a personal tool, not a public API with something to hide
+// from its one user, and "SavingsWithdrawals tab missing" said plainly
+// beats a generic "something went wrong" every caller would have to
+// cross-reference against the server log to diagnose.
+app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error("[controller] request failed:", err);
+  if (res.headersSent) return;
+  res.status(500).json({ error: err instanceof Error ? err.message : "internal error" });
+});
 
 const port = process.env.PORT ?? 3001;
 if (require.main === module) {

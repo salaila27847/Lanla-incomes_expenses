@@ -171,17 +171,23 @@ describe("recurring bills in mock mode", () => {
 describe("real mode row mapping", () => {
   /** Stub googleapis so we can assert on ranges and row parsing. */
   async function loadWithFakeSheets(rowsByRange: Record<string, unknown[][]>) {
-    const calls: { get: string[]; append: { range: string; values: unknown[] }[] } = {
+    const calls: {
+      get: string[];
+      getParams: Record<string, unknown>[];
+      append: { range: string; values: unknown[] }[];
+    } = {
       get: [],
+      getParams: [],
       append: [],
     };
     const { google } = await import("googleapis");
     vi.spyOn(google, "sheets").mockReturnValue({
       spreadsheets: {
         values: {
-          get: async ({ range }: { range: string }) => {
-            calls.get.push(range);
-            return { data: { values: rowsByRange[range] ?? [] } };
+          get: async (params: { range: string }) => {
+            calls.get.push(params.range);
+            calls.getParams.push(params);
+            return { data: { values: rowsByRange[params.range] ?? [] } };
           },
           append: async ({ range, requestBody }: any) => {
             calls.append.push({ range, values: requestBody.values[0] });
@@ -293,6 +299,24 @@ describe("real mode row mapping", () => {
         recurringGroupKey: "recurring-key-1",
       },
     ]);
+  });
+
+  it("requests unformatted values so a display format change can't corrupt a read", async () => {
+    // FORMATTED_VALUE (the API default) returns each cell's *displayed*
+    // string -- so if a money column ever gets reformatted to show fewer
+    // decimals, or as currency, every read of it would silently lose
+    // satang or turn to NaN, with no code change anywhere in this repo.
+    // UNFORMATTED_VALUE makes every numeric column immune to that; the
+    // FORMATTED_STRING dateTimeRenderOption keeps it from also turning a
+    // date-typed cell into a serial number.
+    const { client, calls } = await loadWithFakeSheets({});
+
+    await client.readMasterItems();
+
+    expect(calls.getParams[0]).toMatchObject({
+      valueRenderOption: "UNFORMATTED_VALUE",
+      dateTimeRenderOption: "FORMATTED_STRING",
+    });
   });
 });
 

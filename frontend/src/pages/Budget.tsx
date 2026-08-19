@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { parseAmount } from "../money";
+import { formatMoney, parseAmount } from "../money";
 
 type MustPayStatus = "unpaid" | "paid";
 
@@ -350,7 +350,7 @@ export default function Budget() {
                     {item.name}
                   </span>
                   <span className="shrink-0 tabular-nums">
-                    {item.amount.toLocaleString()} บาท
+                    {formatMoney(item.amount)} บาท
                   </span>
                   {/* Tapping it again undoes it — the button sits in a
                       crowded row and a mistap used to be unrecoverable
@@ -446,7 +446,7 @@ export default function Budget() {
                 <li key={bill.id} className="space-y-0.5 py-2 text-sm">
                   <div className="flex items-center justify-between gap-2">
                     <span className="min-w-0 flex-1 truncate">{bill.name}</span>
-                    <span className="shrink-0 tabular-nums">{bill.amount.toLocaleString()} บาท</span>
+                    <span className="shrink-0 tabular-nums">{formatMoney(bill.amount)} บาท</span>
                     <button
                       type="button"
                       onClick={() => setConfirmingStopId(bill.id)}
@@ -550,10 +550,10 @@ export default function Budget() {
                             )}
                           </span>
                           <span className="shrink-0 tabular-nums">
-                            {(expense.price * expense.quantity - expense.discount).toLocaleString()} บาท
+                            {formatMoney(expense.price * expense.quantity - expense.discount)} บาท
                             {expense.discount > 0 && (
                               <span className="ml-1 text-xs text-emerald-400">
-                                (ลด {expense.discount.toLocaleString()})
+                                (ลด {formatMoney(expense.discount)})
                               </span>
                             )}
                           </span>
@@ -580,12 +580,12 @@ function BudgetCard({ label, spent, cap }: { label: string; spent: number; cap: 
     <div className="rounded-lg border border-slate-800 p-3">
       <p className="text-xs text-slate-500">{label}</p>
       <p className="text-lg">
-        {spent.toLocaleString()} / {cap.toLocaleString()} บาท
+        {formatMoney(spent)} / {formatMoney(cap)} บาท
       </p>
       <p className={`text-xs ${remaining < 0 ? "text-red-400" : "text-slate-500"}`}>
         {remaining < 0
-          ? `เกินงบ ${Math.abs(remaining).toLocaleString()} บาท`
-          : `คงเหลือ ${remaining.toLocaleString()} บาท`}
+          ? `เกินงบ ${formatMoney(Math.abs(remaining))} บาท`
+          : `คงเหลือ ${formatMoney(remaining)} บาท`}
       </p>
     </div>
   );

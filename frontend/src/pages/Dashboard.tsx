@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { amountOr0, parseAmount } from "../money";
 
 interface CycleColumn {
   key: string;
@@ -404,8 +405,8 @@ function IncomePanel({ onSaved }: { onSaved: () => void }) {
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    const value = Number(amount);
-    if (!source.trim() || !value || value <= 0) return;
+    const value = parseAmount(amount);
+    if (!source.trim() || value === null || value <= 0) return;
 
     setSubmitting(true);
     setErrorMessage(null);
@@ -528,9 +529,9 @@ function CyclePanel({
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        openingBalance: Number(openingBalance),
-        cycleBudgetFood: Number(budgetFood),
-        cycleBudgetGoods: Number(budgetGoods),
+        openingBalance: amountOr0(openingBalance),
+        cycleBudgetFood: amountOr0(budgetFood),
+        cycleBudgetGoods: amountOr0(budgetGoods),
       }),
     });
     if (!response.ok) {
@@ -578,7 +579,8 @@ function CyclePanel({
                 placeholder="เงินออม"
                 onBlur={(event) =>
                   saveCycle(cycle.key, {
-                    savingsBalance: event.target.value === "" ? null : Number(event.target.value),
+                    savingsBalance:
+                      event.target.value.trim() === "" ? null : parseAmount(event.target.value),
                   })
                 }
                 className="w-24 shrink-0 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-right text-xs"

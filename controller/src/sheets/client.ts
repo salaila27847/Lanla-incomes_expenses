@@ -33,6 +33,18 @@ async function readRange(range: string): Promise<unknown[][]> {
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range,
+    // Without this, the API returns each cell's *displayed* string rather
+    // than its stored value — so if a Price/Discount/Amount/SavingsBalance
+    // column ever gets reformatted to show fewer decimals (or as currency),
+    // every read of it would silently lose satang, or turn to NaN/0 via
+    // toNumber(), without anyone touching this codebase at all. Raw values
+    // make every numeric column immune to how it happens to be displayed.
+    // dateTimeRenderOption keeps this from also turning a date-typed cell
+    // into a serial number — text-formatted Date/Month/CycleKey columns
+    // (see scripts/setup-sheet.gs) are unaffected either way, since a
+    // plain-text cell was never date-parsed to begin with.
+    valueRenderOption: "UNFORMATTED_VALUE",
+    dateTimeRenderOption: "FORMATTED_STRING",
   });
   return response.data.values ?? [];
 }

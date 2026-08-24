@@ -20,9 +20,16 @@
  * A trailing point ("12.") parses as 12. It is on the way to "12.50" but
  * is already a valid amount, and refusing it would block saving a price
  * that is finished.
+ *
+ * Commas are stripped before validation: a bill big enough to matter is
+ * exactly the kind of amount someone types with thousands separators
+ * ("6,000"), the same convention `formatMoney` below prints back out. The
+ * digit-shape check still runs on what's left, so this doesn't loosen what
+ * counts as a number otherwise — same precedent as the Settings-tab parser
+ * in controller/src/settings.ts, which strips them for the same reason.
  */
 export function parseAmount(text: string): number | null {
-  const trimmed = text.trim();
+  const trimmed = text.trim().replace(/,/g, "");
   if (!trimmed) return null;
   // Number() accepts things no one means as a price: "0x1f", "1e3",
   // "Infinity", and (as whitespace) "\n". Match the shape first.

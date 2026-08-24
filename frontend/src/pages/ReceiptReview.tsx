@@ -44,6 +44,10 @@ interface ScanResponseItem {
 
 interface ScanResponse {
   store: string | null;
+  /** The store this receipt's printed name was mapped to on an earlier
+   *  scan, if any — same SlipPayees mechanism scan-slip's suggested_store
+   *  uses, keyed off `store` instead of a slip's payee. */
+  suggested_store: string | null;
   purchased_at: string | null;
   items: ScanResponseItem[];
   bill_discount: number;
@@ -101,6 +105,11 @@ export default function ReceiptReview() {
   const [slipAmount, setSlipAmount] = useState<number | null>(null);
   const [slipPayee, setSlipPayee] = useState<string | null>(null);
   const [slipTransactionId, setSlipTransactionId] = useState<string | null>(null);
+  // Set only by an item-receipt scan — the raw store text OCR read off the
+  // receipt, kept separate from `store` so a save can still remember the
+  // mapping even if the user edits the picker afterwards. null means "not
+  // from a scan" as much as "not scanned yet".
+  const [scannedStore, setScannedStore] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -133,7 +142,10 @@ export default function ReceiptReview() {
         throw new Error(`สแกนไม่สำเร็จ (${response.status})`);
       }
       const result: ScanResponse = await response.json();
-      setStore(result.store);
+      // Same "suggest a remembered name, fall back to the raw text" pattern
+      // as scan-slip below — see suggested_store on ScanResponse.
+      setStore(result.suggested_store ?? result.store);
+      setScannedStore(result.store);
       setPurchasedAt(result.purchased_at ?? today());
       if (result.master_items) setMasterItems(result.master_items);
       setItems(
@@ -278,6 +290,7 @@ export default function ReceiptReview() {
           ...(slipAmount !== null
             ? { slip: { payee: slipPayee, amount: slipAmount, transaction_id: slipTransactionId } }
             : {}),
+          ...(scannedStore !== null ? { scanned_store: scannedStore } : {}),
         }),
       });
       if (!response.ok) {
@@ -289,6 +302,7 @@ export default function ReceiptReview() {
       setSlipAmount(null);
       setSlipPayee(null);
       setSlipTransactionId(null);
+      setScannedStore(null);
       setStatus("saved");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ");
@@ -325,6 +339,12 @@ export default function ReceiptReview() {
                 setSlipAmount(null);
                 setSlipPayee(null);
                 setSlipTransactionId(null);
+              }
+              // Likewise, a receipt's raw store text shouldn't be sent
+              // along (and remembered) on a save that has nothing to do
+              // with the scan it came from.
+              if (value !== "scan" && scannedStore !== null) {
+                setScannedStore(null);
               }
             }}
             className={`flex-1 rounded-lg py-2 text-sm ${

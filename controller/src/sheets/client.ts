@@ -781,11 +781,16 @@ export async function deleteRecurringBill(id: string): Promise<boolean> {
 // --- Slip payees --------------------------------------------------------
 // A transfer slip's registered payee name ("ร้านถุงเงิน (แซ่บเล้ง แอนด์
 // หม่าล่านายเบิร์ด)") is rarely how the user refers to that store
-// elsewhere in the app, so this tab remembers the mapping the first time a
-// slip is confirmed and prefills the store field the next time the same
-// payee shows up. A tab added after the original eight, so a Sheet that
-// predates it has no "SlipPayees" tab yet -- readOptionalRange treats that
-// as zero rows instead of a 500, same as PendingSavings/RecurringBills.
+// elsewhere in the app -- and neither, just as often, is whatever an
+// item receipt has printed at the top. Same gap, same fix: this tab
+// remembers the mapping the first time either kind of scan is confirmed
+// and prefills the store field the next time the same raw text shows up.
+// `payee` is the field name (scan-slip was first), but /receipt/confirm
+// keys it off an item receipt's OCR'd store text too -- see
+// `scanned_store` in routes/receipt.ts. A tab added after the original
+// eight, so a Sheet that predates it has no "SlipPayees" tab yet --
+// readOptionalRange treats that as zero rows instead of a 500, same as
+// PendingSavings/RecurringBills.
 
 export interface SlipPayeeMapping {
   payee: string;

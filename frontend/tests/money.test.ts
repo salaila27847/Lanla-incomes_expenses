@@ -46,6 +46,15 @@ describe("parseAmount", () => {
     expect(parseAmount("12.")).toBe(12);
   });
 
+  it("accepts a thousands separator", () => {
+    // A bill big enough to need one is exactly the kind of amount someone
+    // types this way — and it's what formatMoney prints back out, so the
+    // parser has to accept its own output. This used to read as "not a
+    // number" and leave the price box stuck with no way to save.
+    expect(parseAmount("1,200")).toBe(1200);
+    expect(parseAmount("56,930.42")).toBe(56930.42);
+  });
+
   describe("an empty box is null, not zero", () => {
     it.each([["nothing", ""], ["spaces", "   "], ["a bare point", "."]])(
       "%s",
@@ -63,7 +72,6 @@ describe("parseAmount", () => {
       ["infinity", "Infinity"],
       ["a newline alone", "\n"],
       ["a negative", "-5"],
-      ["a thousands separator", "1,200"],
       ["two decimal points", "1.2.3"],
       ["letters", "ถูกมาก"],
       ["trailing letters", "15บาท"],

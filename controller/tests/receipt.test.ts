@@ -135,6 +135,33 @@ describe("POST /receipt/scan", () => {
     });
   });
 
+  it("has no suggested store for a store text never seen before", async () => {
+    const { app } = await buildApp();
+    stubBackend({ ocr: { body: ocrTwoItems } });
+
+    const { body } = await request(app)
+      .post("/receipt/scan")
+      .attach("image", Buffer.from("jpeg"), "receipt.jpg");
+
+    expect(body.store).toBe("7-Eleven");
+    expect(body.suggested_store).toBeNull();
+  });
+
+  it("suggests the store an item receipt's printed name was mapped to on an earlier confirm", async () => {
+    // Same gap as scan-slip's payee mapping, same fix -- SlipPayees keyed
+    // off the receipt's raw OCR store text instead of a slip's payee.
+    const { app, sheets } = await buildApp();
+    await sheets.upsertSlipPayeeMapping("7-Eleven", "เซเว่น สาขาปากซอย");
+    stubBackend({ ocr: { body: ocrTwoItems } });
+
+    const { body } = await request(app)
+      .post("/receipt/scan")
+      .attach("image", Buffer.from("jpeg"), "receipt.jpg");
+
+    expect(body.store).toBe("7-Eleven");
+    expect(body.suggested_store).toBe("เซเว่น สาขาปากซอย");
+  });
+
   it("offers the master item list as match candidates", async () => {
     const { app, sheets } = await buildApp();
     await sheets.appendMasterItem("นมสด UHT 250ml", "food");
@@ -512,6 +539,28 @@ describe("POST /receipt/confirm", () => {
 
       expect(response.status).toBe(200);
       expect(await sheets.readPriceHistory()).toHaveLength(1);
+    });
+  });
+
+  describe("item-receipt store mapping", () => {
+    it("remembers the scanned store -> confirmed store mapping after a successful write", async () => {
+      const { app, sheets } = await buildApp();
+
+      await request(app)
+        .post("/receipt/confirm")
+        .send({ ...confirmBody, store: "เซเว่น สาขาปากซอย", scanned_store: "7-Eleven" });
+
+      expect(await sheets.findStoreForPayee("7-Eleven")).toBe("เซเว่น สาขาปากซอย");
+    });
+
+    it("does not remember a mapping when scanned_store is absent", async () => {
+      // Backward compatibility: manual entry and every caller that
+      // predates this field must behave exactly as before.
+      const { app, sheets } = await buildApp();
+
+      await request(app).post("/receipt/confirm").send(confirmBody);
+
+      expect(await sheets.findStoreForPayee("7-Eleven")).toBeNull();
     });
   });
 });

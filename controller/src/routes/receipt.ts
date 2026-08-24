@@ -139,10 +139,18 @@ receiptRouter.post("/scan", upload.single("image"), async (req, res) => {
     }),
   );
 
+  // A printed store name is as inconsistent as a slip's payee name -- same
+  // gap, same fix: SlipPayees remembers whichever raw text was confirmed
+  // against a store before and suggests it here, exactly as it does for
+  // scan-slip. `store` still carries the raw OCR text through so a
+  // successful /confirm can remember this mapping too.
+  const suggestedStore = ocrResult.store ? await findStoreForPayee(ocrResult.store) : null;
+
   // The full list rides along so the picker can offer every master item
   // without a second round trip — they're already read above.
   res.json({
     store: ocrResult.store,
+    suggested_store: suggestedStore,
     purchased_at: ocrResult.purchased_at,
     items,
     bill_discount: ocrResult.bill_discount ?? 0,
@@ -237,6 +245,11 @@ interface ConfirmRequestBody {
    *  actually add up to the real transfer before writing anything, and
    *  remember which store this payee maps to for next time. */
   slip?: { payee: string | null; amount: number };
+  /** Present only when this receipt came from an item-receipt scan: the
+   *  raw store text OCR read off the receipt, distinct from `store` once
+   *  the user has edited or picked a different name. Lets /confirm
+   *  remember the same raw-text -> store mapping /scan-slip does. */
+  scanned_store?: string | null;
 }
 
 // Confirm: the user has reviewed every line (matched or freshly named),
@@ -244,7 +257,7 @@ interface ConfirmRequestBody {
 // name that isn't already in the list gets created; every line becomes a
 // PriceHistory row.
 receiptRouter.post("/confirm", async (req, res) => {
-  const { store, purchased_at, items, slip } = req.body as ConfirmRequestBody;
+  const { store, purchased_at, items, slip, scanned_store } = req.body as ConfirmRequestBody;
 
   if (!Array.isArray(items) || items.length === 0) {
     res.status(400).json({ error: "items must be a non-empty array" });
@@ -308,6 +321,13 @@ receiptRouter.post("/confirm", async (req, res) => {
   // actually confirm.
   if (slip?.payee && store) {
     await upsertSlipPayeeMapping(slip.payee, store);
+  }
+  // Same remembering for an item-receipt scan's raw store text -- keyed
+  // off `scanned_store` rather than `slip.payee`, but the same tab and the
+  // same reasoning: only teach it a mapping once the user has actually
+  // confirmed it.
+  if (scanned_store && store) {
+    await upsertSlipPayeeMapping(scanned_store, store);
   }
 
   res.json({

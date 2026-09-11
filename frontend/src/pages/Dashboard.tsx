@@ -224,12 +224,6 @@ export default function Dashboard() {
                   colorBySign
                 />
                 <TotalRow
-                  label="บัญชีใช้จ่าย (คำนวณ)"
-                  amounts={data.totals.spendingBalance}
-                  cycles={cycles}
-                  colorBySign
-                />
-                <TotalRow
                   label="บัญชีเงินออม (กรอกเอง)"
                   amounts={data.totals.savingsBalance}
                   cycles={cycles}
@@ -295,7 +289,7 @@ function CurrentCycleCards({ data, cycleKey }: { data: DashboardResponse; cycleK
       <Card
         label="ยอดบัญชีใช้จ่าย (คำนวณ)"
         value={signed(data.totals.spendingBalance[cycleKey] ?? 0)}
-        hint="ยอดตั้งต้น + รายรับ − รายจ่าย"
+        hint="รายรับ − รายจ่าย เฉพาะรอบนี้"
       />
     </div>
   );

@@ -241,7 +241,7 @@ describe("real mode row mapping", () => {
 
   it("reads a blank store as null rather than an empty string", async () => {
     const { client } = await loadWithFakeSheets({
-      "PriceHistory!A2:H": [["2026-08-04", "", "นมสด", "food", "15", "1", "id-1"]],
+      "PriceHistory!A2:I": [["2026-08-04", "", "นมสด", "food", "15", "1", "id-1"]],
     });
 
     const [row] = await client.readPriceHistory();
@@ -436,7 +436,7 @@ describe("cycles, income and settings", () => {
     // total it feeds.
     const { client } = await loadWithFakeSheets({
       "Cycles!A2:C": [["2026-08", "2026-07-25", "56,930.42"]],
-      "PriceHistory!A2:H": [["2026-08-04", "Lotus's", "ข้าวสาร", "food", "1,250.50", "1", "id-1"]],
+      "PriceHistory!A2:I": [["2026-08-04", "Lotus's", "ข้าวสาร", "food", "1,250.50", "1", "id-1"]],
     });
 
     expect((await client.readCycleRows())[0].savingsBalance).toBe(56930.42);
@@ -551,7 +551,7 @@ describe("cycles, income and settings", () => {
     // Every row written before the Quantity column existed looks like
     // this. Zero would erase the line from every total that multiplies.
     const { client } = await loadWithFakeSheets({
-      "PriceHistory!A2:H": [["2026-08-04", "", "นมสด", "food", "15", "", ""]],
+      "PriceHistory!A2:I": [["2026-08-04", "", "นมสด", "food", "15", "", ""]],
     });
 
     expect((await client.readPriceHistory())[0].quantity).toBe(1);
@@ -561,7 +561,7 @@ describe("cycles, income and settings", () => {
     // Pre-ID rows are the ones most likely to need correcting, so they
     // still have to be addressable.
     const { client } = await loadWithFakeSheets({
-      "PriceHistory!A2:H": [
+      "PriceHistory!A2:I": [
         ["2026-08-01", "", "เก่า", "food", "10"],
         ["2026-08-02", "", "ใหม่", "food", "20", "1", "uuid-1"],
       ],
@@ -575,7 +575,7 @@ describe("cycles, income and settings", () => {
   it("numbers rows from the sheet, not from the filtered list", async () => {
     // A blanked row in the middle must not shift the handles after it.
     const { client } = await loadWithFakeSheets({
-      "PriceHistory!A2:H": [
+      "PriceHistory!A2:I": [
         ["2026-08-01", "", "หนึ่ง", "food", "10"],
         [],
         ["2026-08-03", "", "สาม", "food", "30"],
@@ -587,7 +587,7 @@ describe("cycles, income and settings", () => {
 
   it("updates the row a UUID points at", async () => {
     const { client, calls } = await loadWithFakeSheets({
-      "PriceHistory!A2:H": [
+      "PriceHistory!A2:I": [
         ["2026-08-01", "", "หนึ่ง", "food", "10", "1", "uuid-1"],
         ["2026-08-02", "", "สอง", "food", "20", "1", "uuid-2"],
       ],
@@ -596,7 +596,7 @@ describe("cycles, income and settings", () => {
 
     await client.updatePriceHistoryRow("uuid-2", { price: 25 });
 
-    expect(calls.update[0].range).toBe("PriceHistory!A3:H3");
+    expect(calls.update[0].range).toBe("PriceHistory!A3:I3");
     expect(calls.update[0].values).toEqual([
       "2026-08-02",
       "",
@@ -606,6 +606,7 @@ describe("cycles, income and settings", () => {
       1,
       "uuid-2",
       0,
+      "",
     ]);
   });
 
@@ -613,20 +614,20 @@ describe("cycles, income and settings", () => {
     // Writing a UUID here would invalidate the row: handle the caller is
     // still holding.
     const { client, calls } = await loadWithFakeSheets({
-      "PriceHistory!A2:H": [["2026-08-01", "", "เก่า", "food", "10"]],
+      "PriceHistory!A2:I": [["2026-08-01", "", "เก่า", "food", "10"]],
     });
 
     await client.updatePriceHistoryRow("row:2", { quantity: 3 });
 
-    expect(calls.update[0].range).toBe("PriceHistory!A2:H2");
-    expect(calls.update[0].values).toEqual(["2026-08-01", "", "เก่า", "food", 10, 3, "", 0]);
+    expect(calls.update[0].range).toBe("PriceHistory!A2:I2");
+    expect(calls.update[0].values).toEqual(["2026-08-01", "", "เก่า", "food", 10, 3, "", 0, ""]);
   });
 
   it("blanks a deleted expense rather than removing the row", async () => {
     // Removing it would shift every later row number and break the
     // row: handles already handed out.
     const { client, calls } = await loadWithFakeSheets({
-      "PriceHistory!A2:H": [
+      "PriceHistory!A2:I": [
         ["2026-08-01", "", "หนึ่ง", "food", "10", "1", "uuid-1"],
         ["2026-08-02", "", "สอง", "food", "20", "1", "uuid-2"],
       ],
@@ -635,13 +636,13 @@ describe("cycles, income and settings", () => {
 
     expect(await client.deletePriceHistoryRow("uuid-2")).toBe(true);
     expect(calls.update[0]).toEqual({
-      range: "PriceHistory!A3:H3",
-      values: ["", "", "", "", "", "", "", ""],
+      range: "PriceHistory!A3:I3",
+      values: ["", "", "", "", "", "", "", "", ""],
     });
   });
 
   it("reports an unknown expense id rather than writing somewhere", async () => {
-    const { client, calls } = await loadWithFakeSheets({ "PriceHistory!A2:H": [] });
+    const { client, calls } = await loadWithFakeSheets({ "PriceHistory!A2:I": [] });
 
     expect(await client.deletePriceHistoryRow("uuid-nope")).toBe(false);
     expect(await client.updatePriceHistoryRow("uuid-nope", { price: 1 })).toBeNull();
@@ -652,7 +653,7 @@ describe("cycles, income and settings", () => {
     // "row:99" parses fine but points at nothing. Blanking it would
     // succeed silently and tell the user a row was deleted.
     const { client, calls } = await loadWithFakeSheets({
-      "PriceHistory!A2:H": [["2026-08-01", "", "เก่า", "food", "10"]],
+      "PriceHistory!A2:I": [["2026-08-01", "", "เก่า", "food", "10"]],
     });
 
     expect(await client.deletePriceHistoryRow("row:99")).toBe(false);
@@ -663,7 +664,7 @@ describe("cycles, income and settings", () => {
     // "row:1" is the header, and a non-numeric suffix is nonsense; either
     // would otherwise overwrite the column titles.
     const { client, calls } = await loadWithFakeSheets({
-      "PriceHistory!A2:H": [["2026-08-01", "", "เก่า", "food", "10"]],
+      "PriceHistory!A2:I": [["2026-08-01", "", "เก่า", "food", "10"]],
     });
 
     expect(await client.deletePriceHistoryRow("row:1")).toBe(false);
@@ -777,7 +778,7 @@ describe("discounts", () => {
   it("reads a blank discount as none", async () => {
     // Every row written before the column existed looks like this.
     const { client } = await loadWithFakeSheets({
-      "PriceHistory!A2:H": [["2026-08-04", "", "นมสด", "food", "15", "3", "id-1"]],
+      "PriceHistory!A2:I": [["2026-08-04", "", "นมสด", "food", "15", "3", "id-1"]],
     });
 
     expect((await client.readPriceHistory())[0].discount).toBe(0);
@@ -793,7 +794,7 @@ describe("discounts", () => {
     // The whole point of storing them apart: the price history keeps the
     // printed price, so a promo doesn't become what the product costs.
     const { client } = await loadWithFakeSheets({
-      "PriceHistory!A2:H": [["2026-08-04", "", "นมสด", "food", "15", "3", "id-1", "5"]],
+      "PriceHistory!A2:I": [["2026-08-04", "", "นมสด", "food", "15", "3", "id-1", "5"]],
     });
 
     const [row] = await client.readPriceHistory();
@@ -815,7 +816,7 @@ describe("discounts", () => {
       discount: 5,
     });
 
-    expect(calls.append[0].range).toBe("PriceHistory!A:H");
+    expect(calls.append[0].range).toBe("PriceHistory!A:I");
     expect(calls.append[0].values[7]).toBe(5);
   });
 
@@ -831,6 +832,61 @@ describe("discounts", () => {
     });
 
     expect(row.discount).toBe(0);
+  });
+
+  describe("fundedBySavings", () => {
+    it("defaults a new row to false", async () => {
+      const client = await loadClient();
+
+      const row = await client.appendPriceHistoryRow({
+        date: "2026-08-04",
+        store: null,
+        masterItemName: "นมสด",
+        category: "food",
+        price: 15,
+      });
+
+      expect(row.fundedBySavings).toBe(false);
+    });
+
+    it("round-trips true through mock mode", async () => {
+      const client = await loadClient();
+
+      await client.appendPriceHistoryRow({
+        date: "2026-08-04",
+        store: null,
+        masterItemName: "ตู้เย็น",
+        category: "goods",
+        price: 12000,
+        fundedBySavings: true,
+      });
+
+      expect((await client.readPriceHistory())[0].fundedBySavings).toBe(true);
+    });
+
+    it("reads a blank column as false", async () => {
+      // Every row written before this column existed looks like this.
+      const { client } = await loadWithFakeSheets({
+        "PriceHistory!A2:I": [["2026-08-04", "", "นมสด", "food", "15", "3", "id-1", "5"]],
+      });
+
+      expect((await client.readPriceHistory())[0].fundedBySavings).toBe(false);
+    });
+
+    it("writes true as its own column", async () => {
+      const { client, calls } = await loadWithFakeSheets({});
+
+      await client.appendPriceHistoryRow({
+        date: "2026-08-04",
+        store: null,
+        masterItemName: "ตู้เย็น",
+        category: "goods",
+        price: 12000,
+        fundedBySavings: true,
+      });
+
+      expect(calls.append[0].values[8]).toBe("TRUE");
+    });
   });
 
   describe("isDiscountOnly", () => {

@@ -156,6 +156,26 @@ describe("/qr/pending", () => {
     ]);
   });
 
+  it("does not mark a transfer-back settlement as funded by savings", async () => {
+    // The spending account pays the savings account back on this path, so
+    // the row must count against the spending account's own budget --
+    // unlike /deduct below, which permanently drew down savings instead.
+    const { app, sheets } = await buildAppWithSheets();
+    const pending = await sheets.appendPendingSavingsItem({
+      date: "2026-07-28",
+      store: "Big C",
+      masterItemName: "ผงซักฟอก",
+      category: "goods",
+      price: 120,
+      quantity: 1,
+      discount: 0,
+    });
+
+    await request(app).post(`/qr/pending/${pending.id}/confirm`);
+
+    expect(await sheets.readPriceHistory()).toMatchObject([{ fundedBySavings: false }]);
+  });
+
   it("creates the master item on confirm if it's new", async () => {
     const { app, sheets } = await buildAppWithSheets();
     const pending = await sheets.appendPendingSavingsItem({
@@ -252,6 +272,26 @@ describe("/qr/pending/:id/deduct", () => {
     expect(await sheets.readPriceHistory()).toMatchObject([
       { date: "2026-07-28", store: "Big C", masterItemName: "ตู้เย็น", price: 12000 },
     ]);
+  });
+
+  it("marks the PriceHistory row as funded by savings", async () => {
+    // This is what keeps budget.ts and dashboard.ts from also deducting
+    // the line from the spending account's food/goods figures -- the
+    // savings account already permanently paid it via the withdrawal below.
+    const { app, sheets } = await buildAppWithSheets();
+    const pending = await sheets.appendPendingSavingsItem({
+      date: "2026-07-28",
+      store: "Big C",
+      masterItemName: "ตู้เย็น",
+      category: "goods",
+      price: 12000,
+      quantity: 1,
+      discount: 0,
+    });
+
+    await request(app).post(`/qr/pending/${pending.id}/deduct`);
+
+    expect(await sheets.readPriceHistory()).toMatchObject([{ fundedBySavings: true }]);
   });
 
   it("logs a SavingsWithdrawal for the item's line total", async () => {

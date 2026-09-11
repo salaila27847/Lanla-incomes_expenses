@@ -38,9 +38,14 @@ var TABS = [
     // keeps what a product normally costs; Quantity multiplies it and
     // Discount comes off the line. What was paid is
     // Price * Quantity - Discount. ID is what lets a row be edited later.
+    // FundedBySavings is TRUE only for a line settled as a permanent
+    // savings drawdown ("หักจากบัญชีเงินออม") -- it keeps the row out of
+    // the spending account's food/goods totals on Budget and Dashboard,
+    // since that account never paid it.
     name: 'PriceHistory',
     headers: [
       'Date', 'Store', 'MasterItemName', 'Category', 'Price', 'Quantity', 'ID', 'Discount',
+      'FundedBySavings',
     ],
     textColumns: [1, 7], // Date, ID
   },

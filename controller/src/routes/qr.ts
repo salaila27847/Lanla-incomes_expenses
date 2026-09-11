@@ -49,16 +49,24 @@ qrRouter.get("/pending", async (_req, res) => {
  *  account ends up bearing the cost), using the item's own purchase date
  *  rather than today's — a purchase made near the end of a cycle but
  *  settled later must stay in the cycle it was actually bought in, or it
- *  silently jumps to the wrong column. */
-async function settlePendingIntoPriceHistory(pending: {
-  date: string;
-  store: string | null;
-  masterItemName: string;
-  category: "food" | "goods";
-  price: number;
-  quantity: number;
-  discount: number;
-}): Promise<void> {
+ *  silently jumps to the wrong column.
+ *
+ *  `fundedBySavings` is the one thing that *does* depend on which path
+ *  called this: true only means the savings account paid and keeps paying,
+ *  so budget.ts and dashboard.ts must not also charge it against the
+ *  spending account's food/goods figures. */
+async function settlePendingIntoPriceHistory(
+  pending: {
+    date: string;
+    store: string | null;
+    masterItemName: string;
+    category: "food" | "goods";
+    price: number;
+    quantity: number;
+    discount: number;
+  },
+  fundedBySavings: boolean,
+): Promise<void> {
   const existingNames = new Set((await readMasterItems()).map((mi) => mi.name));
   if (!existingNames.has(pending.masterItemName)) {
     await appendMasterItem(pending.masterItemName, pending.category);
@@ -71,6 +79,7 @@ async function settlePendingIntoPriceHistory(pending: {
     price: pending.price,
     quantity: pending.quantity,
     discount: pending.discount,
+    fundedBySavings,
   });
 }
 
@@ -86,7 +95,7 @@ qrRouter.post("/pending/:id/confirm", async (req, res) => {
     return;
   }
 
-  await settlePendingIntoPriceHistory(pending);
+  await settlePendingIntoPriceHistory(pending, false);
   await deletePendingSavingsItem(pending.id);
 
   res.json({ success: true, id: pending.id });
@@ -106,7 +115,7 @@ qrRouter.post("/pending/:id/deduct", async (req, res) => {
   }
 
   const amount = lineTotal(pending);
-  await settlePendingIntoPriceHistory(pending);
+  await settlePendingIntoPriceHistory(pending, true);
   await appendSavingsWithdrawal({
     date: pending.date,
     masterItemName: pending.masterItemName,

@@ -68,20 +68,7 @@ dashboardRouter.get("/", async (req, res) => {
     loadSettings(),
   ]);
 
-  // The running balance has to start at the earliest cycle with any data,
-  // not at January of the requested year — otherwise each year restarts
-  // from the opening balance and every figure after the first is wrong.
-  const dataYears = [
-    ...cycleRows.map((row) => row.key),
-    ...mustPay.map((item) => item.month),
-    ...income.map((entry) => entry.date),
-    ...priceHistory.map((row) => row.date),
-  ]
-    .map((value) => Number(String(value).slice(0, 4)))
-    .filter((value) => Number.isInteger(value) && value >= 1970);
-  const firstYear = Math.min(year, ...dataYears);
-
-  const cycles = buildCycleRange(`${firstYear - 1}-12`, `${year}-12`, paydaysFrom(cycleRows));
+  const cycles = buildCycleRange(`${year}-01`, `${year}-12`, paydaysFrom(cycleRows));
 
   const incomeBySource = new Map<string, AmountsByCycle>();
   const incomeTotals: AmountsByCycle = {};
@@ -121,16 +108,12 @@ dashboardRouter.get("/", async (req, res) => {
 
   const expenseTotals: AmountsByCycle = {};
   const netTotals: AmountsByCycle = {};
-  const spendingBalance: AmountsByCycle = {};
-  let running = settings.openingBalance;
   for (const cycle of cycles) {
     expenseTotals[cycle.key] =
       (fixedTotals[cycle.key] ?? 0) +
       (foodAmounts[cycle.key] ?? 0) +
       (goodsAmounts[cycle.key] ?? 0);
     netTotals[cycle.key] = (incomeTotals[cycle.key] ?? 0) - expenseTotals[cycle.key];
-    running += netTotals[cycle.key];
-    spendingBalance[cycle.key] = running;
   }
 
   const keys = cycleKeysInYear(year);
@@ -139,7 +122,7 @@ dashboardRouter.get("/", async (req, res) => {
 
   res.json({
     year,
-    cycles: cycles.filter((cycle) => keys.includes(cycle.key)),
+    cycles,
     currentCycleKey: cycleForDate(today, cycles)?.key ?? null,
     sections: [
       { id: "income", title: "รายรับ", rows: visibleRows(incomeBySource, keys) },
@@ -150,7 +133,10 @@ dashboardRouter.get("/", async (req, res) => {
       income: slice(incomeTotals, keys),
       expense: slice(expenseTotals, keys),
       net: slice(netTotals, keys),
-      spendingBalance: slice(spendingBalance, keys),
+      // Per-cycle income − expense only — no carry-forward from the opening
+      // balance or earlier cycles. See CLAUDE.md for the prior, cumulative
+      // design this replaced.
+      spendingBalance: slice(netTotals, keys),
       savingsBalance: Object.fromEntries(keys.map((key) => [key, savingsByKey.get(key) ?? null])),
     },
     budget: { food: settings.cycleBudgetFood, goods: settings.cycleBudgetGoods },

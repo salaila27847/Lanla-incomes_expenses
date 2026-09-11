@@ -295,7 +295,7 @@ function CurrentCycleCards({ data, cycleKey }: { data: DashboardResponse; cycleK
       <Card
         label="ยอดบัญชีใช้จ่าย (คำนวณ)"
         value={signed(data.totals.spendingBalance[cycleKey] ?? 0)}
-        hint="ยอดตั้งต้น + รายรับ − รายจ่าย"
+        hint="รายรับ − รายจ่าย เฉพาะรอบนี้"
       />
     </div>
   );

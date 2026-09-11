@@ -1,10 +1,11 @@
 /**
  * /dashboard renders a year as pay-cycle columns.
  *
- * The two things most worth pinning here are the ones a plain
- * group-by-month would get wrong: spend after payday belongs to the *next*
- * month's column, and the account balance is a running total that has to
- * carry across a year boundary rather than restarting each January.
+ * The thing most worth pinning here is the one a plain group-by-month
+ * would get wrong: spend after payday belongs to the *next* month's
+ * column. The calculated spending balance is per cycle only — income
+ * minus that cycle's own expense, with no carry-forward from the opening
+ * balance or from any other cycle.
  */
 import express from "express";
 import request from "supertest";
@@ -209,7 +210,7 @@ describe("GET /dashboard totals", () => {
     expect(body.totals.net["2026-08"]).toBe(18000);
   });
 
-  it("runs the spending balance forward from the opening balance", async () => {
+  it("matches income minus expense for each cycle on its own, ignoring the opening balance", async () => {
     const { app, sheets } = await buildApp();
     await sheets.writeSettings({ opening_balance: "1000" });
     await sheets.upsertCycleRow(AUGUST);
@@ -220,20 +221,18 @@ describe("GET /dashboard totals", () => {
 
     const { body } = await request(app).get("/dashboard?year=2026");
 
-    expect(body.totals.spendingBalance["2026-08"]).toBe(4000); // 1000 + 5000 − 2000
-    expect(body.totals.spendingBalance["2026-09"]).toBe(2000); // carries, then − 2000
+    expect(body.totals.spendingBalance["2026-08"]).toBe(3000); // 5000 − 2000, opening balance not applied
+    expect(body.totals.spendingBalance["2026-09"]).toBe(-2000); // no carry-forward from August
   });
 
-  it("carries the balance in from earlier years", async () => {
-    // Without this the balance restarts from the opening figure every
-    // January and every column of the year is wrong.
+  it("does not carry income from earlier years into this year's balance", async () => {
     const { app, sheets } = await buildApp();
     await sheets.writeSettings({ opening_balance: "1000" });
     await sheets.appendIncome({ date: "2025-06-20", source: "เงินเดือน", amount: 10000 });
 
     const { body } = await request(app).get("/dashboard?year=2026");
 
-    expect(body.totals.spendingBalance["2026-01"]).toBe(11000);
+    expect(body.totals.spendingBalance["2026-01"]).toBe(0);
   });
 
   it("reports the savings balance the user entered, and null where they haven't", async () => {

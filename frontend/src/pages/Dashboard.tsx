@@ -224,12 +224,6 @@ export default function Dashboard() {
                   colorBySign
                 />
                 <TotalRow
-                  label="บัญชีใช้จ่าย (คำนวณ)"
-                  amounts={data.totals.spendingBalance}
-                  cycles={cycles}
-                  colorBySign
-                />
-                <TotalRow
                   label="บัญชีเงินออม (กรอกเอง)"
                   amounts={data.totals.savingsBalance}
                   cycles={cycles}

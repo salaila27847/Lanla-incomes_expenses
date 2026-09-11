@@ -103,6 +103,11 @@ budgetRouter.get("/", async (_req, res) => {
   const spentThisCycle = { food: 0, goods: 0 };
   if (cycle) {
     for (const row of priceHistory) {
+      // A row settled as a permanent savings drawdown ("หักจากบัญชีเงินออม")
+      // was never paid out of the spending account, so it must not count
+      // against its food/goods cap too — that would deduct the same line
+      // from both accounts at once.
+      if (row.fundedBySavings) continue;
       if (row.date >= cycle.payday && row.date <= cycle.end) {
         // price is per unit and before any discount, so what was spent is
         // neither of them on its own.

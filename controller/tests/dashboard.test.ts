@@ -150,6 +150,27 @@ describe("GET /dashboard", () => {
     expect(amountsOf(body, "variable", "🧴 ของใช้")["2026-08"]).toBe(89);
   });
 
+  it("excludes a line permanently paid from savings from the variable spend row", async () => {
+    // Same exclusion as budget.ts's spentThisCycle, and for the same reason:
+    // a "หักจากบัญชีเงินออม" settlement already lowered SavingsBalance, so
+    // counting it here too would take it out of the spending account as well.
+    const { app, sheets } = await buildApp();
+    await sheets.upsertCycleRow(AUGUST);
+    await sheets.appendPriceHistoryRow({
+      date: "2026-08-01",
+      store: "Big C",
+      masterItemName: "ตู้เย็น",
+      category: "goods",
+      price: 12000,
+      fundedBySavings: true,
+    });
+
+    const { body } = await request(app).get("/dashboard?year=2026");
+
+    expect(amountsOf(body, "variable", "🧴 ของใช้")).toBeUndefined();
+    expect(body.totals.expense["2026-08"]).toBe(0);
+  });
+
   it("puts spend after payday in the next month's column", async () => {
     // The whole reason cycles exist. 30 July is August's money, because
     // August's salary landed on 25 July — a calendar-month grouping would

@@ -100,6 +100,10 @@ dashboardRouter.get("/", async (req, res) => {
   const foodAmounts = variableByName.get("🍔 ค่ากิน")!;
   const goodsAmounts = variableByName.get("🧴 ของใช้")!;
   for (const row of priceHistory) {
+    // A permanent savings drawdown never touched the spending account, so
+    // it must not also reduce this cycle's spending-account net — see the
+    // same exclusion, and why, in budget.ts.
+    if (row.fundedBySavings) continue;
     const cycle = cycleForDate(row.date, cycles);
     if (!cycle) continue;
     // What was paid, not the unit price — see the same note in budget.ts.

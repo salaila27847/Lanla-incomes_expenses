@@ -141,11 +141,23 @@ export interface PriceHistoryRow {
    *  discount isn't is a bill-level discount rather than a product. */
   discount: number;
   category: ItemCategory;
+  /** True only for a line settled via the "หักจากบัญชีเงินออม" permanent
+   *  savings drawdown (/qr/pending/:id/deduct) — the savings account paid
+   *  and keeps paying, so the spending account's food/goods budget must not
+   *  also count it. Defaults to false, which is correct both for every
+   *  normal row and for a "โอนคืนบัญชีใช้จ่าย" settlement, where the
+   *  spending account genuinely does end up paying. Doesn't affect price
+   *  history or /prices, which don't care which account paid. */
+  fundedBySavings: boolean;
 }
 
-export type PriceHistoryInput = Omit<PriceHistoryRow, "id" | "quantity" | "discount"> & {
+export type PriceHistoryInput = Omit<
+  PriceHistoryRow,
+  "id" | "quantity" | "discount" | "fundedBySavings"
+> & {
   quantity?: number;
   discount?: number;
+  fundedBySavings?: boolean;
 };
 
 /** What the line actually cost. The only correct way to sum money here. */
@@ -306,6 +318,7 @@ function priceHistoryValues(row: PriceHistoryRow): unknown[] {
     row.quantity,
     row.id,
     row.discount,
+    row.fundedBySavings ? "TRUE" : "",
   ];
 }
 
@@ -315,12 +328,13 @@ export async function appendPriceHistoryRow(input: PriceHistoryInput): Promise<P
     id: randomUUID(),
     quantity: input.quantity ?? 1,
     discount: input.discount ?? 0,
+    fundedBySavings: input.fundedBySavings ?? false,
   };
   if (MOCK_MODE) {
     mockPriceHistory.push(row);
     return row;
   }
-  await appendRow("PriceHistory!A:H", priceHistoryValues(row));
+  await appendRow("PriceHistory!A:I", priceHistoryValues(row));
   return row;
 }
 
@@ -328,7 +342,7 @@ export async function readPriceHistory(): Promise<PriceHistoryRow[]> {
   if (MOCK_MODE) {
     return mockPriceHistory;
   }
-  const rows = await readRange("PriceHistory!A2:H");
+  const rows = await readRange("PriceHistory!A2:I");
   return rows
     .map((row, index) => ({ row, rowNumber: index + 2 }))
     .filter(({ row }) => row[0])
@@ -350,6 +364,9 @@ export async function readPriceHistory(): Promise<PriceHistoryRow[]> {
       // this column existed is. toNumber already reads blank as 0, so
       // unlike quantity there's no "not entered" case to preserve here.
       discount: toNumber(row[7]),
+      // Blank means false, matching every row written before this column
+      // existed — none of them were a permanent savings drawdown.
+      fundedBySavings: row[8] === "TRUE",
     }));
 }
 
@@ -385,10 +402,11 @@ export async function updatePriceHistoryRow(
   // A pre-ID row keeps its row: handle rather than gaining a UUID, so the
   // handle the caller is holding stays valid.
   const values = priceHistoryValues(merged);
-  await updateRange(`PriceHistory!A${rowNumber}:H${rowNumber}`, [
+  await updateRange(`PriceHistory!A${rowNumber}:I${rowNumber}`, [
     ...values.slice(0, 6),
     id.startsWith("row:") ? "" : id,
     values[7],
+    values[8],
   ]);
   return merged;
 }
@@ -409,7 +427,7 @@ export async function deletePriceHistoryRow(id: string): Promise<boolean> {
   const rowNumber = await priceHistoryRowNumber(id);
   if (rowNumber === null) return false;
   // Blanked, not removed — see the note on `row:<n>` above, and deleteIncome.
-  await updateRange(`PriceHistory!A${rowNumber}:H${rowNumber}`, ["", "", "", "", "", "", "", ""]);
+  await updateRange(`PriceHistory!A${rowNumber}:I${rowNumber}`, ["", "", "", "", "", "", "", "", ""]);
   return true;
 }
 

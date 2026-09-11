@@ -94,6 +94,32 @@ describe("GET /budget", () => {
     expect(body.spentThisCycle).toEqual({ food: 44, goods: 59 });
   });
 
+  it("excludes a line permanently paid from savings, so it isn't deducted from both accounts", async () => {
+    // A "หักจากบัญชีเงินออม" settlement already lowers Cycles.SavingsBalance
+    // (see qr.test.ts) -- counting the same PriceHistory row against the
+    // spending account's food/goods cap too would deduct it twice over.
+    const { app, sheets } = await buildApp();
+    await sheets.appendPriceHistoryRow({
+      date: TODAY,
+      store: "Big C",
+      masterItemName: "ตู้เย็น",
+      category: "goods",
+      price: 12000,
+      fundedBySavings: true,
+    });
+    await sheets.appendPriceHistoryRow({
+      date: TODAY,
+      store: "7-Eleven",
+      masterItemName: "นมสด",
+      category: "food",
+      price: 15,
+    });
+
+    const { body } = await request(app).get("/budget");
+
+    expect(body.spentThisCycle).toEqual({ food: 15, goods: 0 });
+  });
+
   it("counts earlier days in the same cycle", async () => {
     // The cap is per cycle now, so yesterday's lunch still counts against
     // it — the old daily version deliberately excluded this.

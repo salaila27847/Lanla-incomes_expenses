@@ -17,8 +17,8 @@ Create a new Google Sheet with ten tabs, each with an exact header row in row 1:
 |------|----------|-----------|
 
 **Tab `PriceHistory`**
-| Date | Store | MasterItemName | Category | Price | Quantity | ID | Discount |
-|------|-------|-----------------|----------|-------|----------|-----|----------|
+| Date | Store | MasterItemName | Category | Price | Quantity | ID | Discount | FundedBySavings |
+|------|-------|-----------------|----------|-------|----------|-----|----------|-----------------|
 
 `Price` is **per unit and before any discount**, `Quantity` multiplies it,
 and `Discount` comes off the line as a whole. **What was paid is
@@ -34,11 +34,23 @@ A discount off the **whole bill** is stored as its own row — `Price` 0 with
 the amount in `Discount`, so it totals to a negative without any negative
 price existing anywhere. Rows like that are skipped by the price search.
 
+`FundedBySavings` is `TRUE` only for a line settled from `PendingSavings` as
+a permanent savings drawdown ("หักจากบัญชีเงินออม" — see `SavingsWithdrawals`
+below); blank/anything else reads as `false`, which is correct for every
+normal row and for the transfer-back settlement too, since the spending
+account genuinely pays those. Budget's caps and the Dashboard's food/goods
+totals skip a `TRUE` row — the savings account already paid it, so counting
+it against the spending account too would deduct the same purchase from both
+accounts. `/prices` ignores this column entirely: price comparison doesn't
+care which account paid.
+
 ⚠️ **If your Sheet already has this tab**, add the missing columns by hand —
 `setUpTrackerSheet` never touches a tab that already exists, and
 `checkTrackerSheet` will tell you which ones are missing. Until you do,
 scanning still works and existing rows read fine, but rows can't be edited
-or deleted (`ID` identifies a row) and discounts aren't recorded.
+or deleted (`ID` identifies a row), discounts aren't recorded, and any past
+savings drawdown keeps counting against the spending account's budget until
+you backfill `FundedBySavings` for it by hand.
 
 **Tab `MustPay`**
 | ID | Name | Amount | Month | Status | PaidAt | RecurringGroupKey |
@@ -126,7 +138,9 @@ savings-tagged `Income` entry raises it — the app was just told about a
 known change, so there's nothing to lose by applying it right away instead
 of waiting for the next hand-typed correction. Exists purely for the
 Savings tab's movement list; it doesn't feed `PriceHistory` or the budget
-caps itself — the `PendingSavings` confirmation already wrote that row.
+caps itself — the `PendingSavings` confirmation already wrote that row,
+with `FundedBySavings` set so the spending account's own budget caps and
+Dashboard totals skip it.
 
 **Tab `SlipPayees`**
 | PayeeName | StoreName |

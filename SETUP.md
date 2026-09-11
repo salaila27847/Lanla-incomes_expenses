@@ -49,16 +49,8 @@ care which account paid.
 `checkTrackerSheet` will tell you which ones are missing. Until you do,
 scanning still works and existing rows read fine, but rows can't be edited
 or deleted (`ID` identifies a row), discounts aren't recorded, and any past
-savings drawdown keeps counting against the spending account's budget too.
-
-After adding `FundedBySavings`, run `backfillFundedBySavings` (same file,
-same way you ran `setUpTrackerSheet`) once to fix that last part: it matches
-each existing `SavingsWithdrawals` row back to the `PriceHistory` row the
-same "หักจากบัญชีเงินออม" settlement wrote — by date, item, category and
-amount, since nothing links the two rows by ID — and marks it `TRUE`. A
-withdrawal it can't match to exactly one row is left alone and listed in
-the summary instead of guessed at; mark those by hand on `PriceHistory`
-(column `I`). Safe to run more than once.
+savings drawdown keeps counting against the spending account's budget until
+you backfill `FundedBySavings` for it by hand.
 
 **Tab `MustPay`**
 | ID | Name | Amount | Month | Status | PaidAt | RecurringGroupKey |

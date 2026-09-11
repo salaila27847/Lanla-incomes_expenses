@@ -6,7 +6,7 @@ The `/controller` service needs a real Google Sheet and a service account to tal
 
 **Shortcut:** `scripts/setup-sheet.gs` builds every tab below for you. Open the Sheet → **Extensions → Apps Script**, paste that file in, save, and run `setUpTrackerSheet`. It creates only the tabs that are missing and leaves existing ones completely untouched, so it's safe on a Sheet already in use — and it sets the column formats that keep `2026-01` from turning into a date. It also seeds the `Cycles` tab with a row per month of the current year, ready for your paydays.
 
-The same file has a `checkTrackerSheet` you can run afterwards: it reads nothing but reports, and tells you if any dated column comes back in a format the controller will reject. Worth running on a Sheet that predates these tabs, since `setUpTrackerSheet` deliberately won't reformat one that already exists.
+The same file has a `checkTrackerSheet` you can run afterwards: it reads nothing but reports, and tells you if any dated column comes back in a format the controller will reject, or if a tab that already existed is missing a column added since (each ⚠️ note below). If it reports a missing column, run `addMissingColumns`: it only ever fills in a header cell that's still blank (never overwrites one, never touches a data row), so it's safe on a Sheet with real data in it, and it also sets that column's plain-text formatting even if the header was already there by hand.
 
 The rest of this section is the reference for what the script builds (or for doing it by hand).
 
@@ -44,13 +44,19 @@ it against the spending account too would deduct the same purchase from both
 accounts. `/prices` ignores this column entirely: price comparison doesn't
 care which account paid.
 
-⚠️ **If your Sheet already has this tab**, add the missing columns by hand —
-`setUpTrackerSheet` never touches a tab that already exists, and
-`checkTrackerSheet` will tell you which ones are missing. Until you do,
-scanning still works and existing rows read fine, but rows can't be edited
-or deleted (`ID` identifies a row), discounts aren't recorded, and any past
-savings drawdown keeps counting against the spending account's budget until
-you backfill `FundedBySavings` for it by hand.
+⚠️ **If your Sheet already has this tab**, run `addMissingColumns` (or add
+the missing columns by hand) — `setUpTrackerSheet` never touches a tab that
+already exists, and `checkTrackerSheet` will tell you which ones are
+missing. Until you do, scanning still works and existing rows read fine,
+but rows can't be edited or deleted (`ID` identifies a row), discounts
+aren't recorded, and any past savings drawdown keeps counting against the
+spending account's budget too.
+
+Adding the column doesn't retroactively fix that last part for rows already
+written — for those, open `SavingsWithdrawals`, find each row's Date /
+MasterItemName / Amount, find the matching `PriceHistory` row (same date,
+item, and `Price × Quantity − Discount` equal to that amount), and type
+`TRUE` into its `FundedBySavings` cell by hand.
 
 **Tab `MustPay`**
 | ID | Name | Amount | Month | Status | PaidAt | RecurringGroupKey |
@@ -61,11 +67,11 @@ you backfill `FundedBySavings` for it by hand.
 `RecurringBills` entry — blank for anything typed in by hand. Blank also
 reads correctly on rows written before this column existed.)
 
-⚠️ **If your Sheet already has this tab**, add the `RecurringGroupKey`
-column by hand — `setUpTrackerSheet` never touches a tab that already
-exists. Until you do, everything else on this tab works fine; only
-recurring-bill generation is affected (it would create a duplicate row
-each cycle instead of recognising the one it already made).
+⚠️ **If your Sheet already has this tab**, run `addMissingColumns` (or add
+the `RecurringGroupKey` column by hand) — `setUpTrackerSheet` never touches
+a tab that already exists. Until you do, everything else on this tab works
+fine; only recurring-bill generation is affected (it would create a
+duplicate row each cycle instead of recognising the one it already made).
 
 **Tab `RecurringBills`**
 | ID | Name | Amount | CardGroup | InstallmentsRemaining | Active | LastBilledCycle |
@@ -89,11 +95,11 @@ bill already counted this cycle from having its `InstallmentsRemaining`
 decremented a second time once its group's row gets recomputed for a
 newly added bill.
 
-⚠️ **If your Sheet already has this tab**, add the `LastBilledCycle`
-header by hand for clarity — `setUpTrackerSheet` never touches a tab that
-already exists. The app reads and writes column G by position regardless
-of whether row 1 labels it, so this is cosmetic; nothing behaves
-differently either way.
+⚠️ **If your Sheet already has this tab**, run `addMissingColumns` (or add
+the `LastBilledCycle` header by hand) for clarity — `setUpTrackerSheet`
+never touches a tab that already exists. The app reads and writes column G
+by position regardless of whether row 1 labels it, so this is cosmetic;
+nothing behaves differently either way.
 
 **Tab `Cycles`**
 | CycleKey | PaydayDate | SavingsBalance |
@@ -163,11 +169,11 @@ entry (a bonus, a windfall) rolls straight into that entry's cycle on the
 `Cycles` tab, adding to whatever `SavingsBalance` is already recorded
 there rather than replacing it.
 
-⚠️ **If your Sheet already has this tab**, add the `DestinationAccount`
-column by hand for clarity — `setUpTrackerSheet` never touches a tab that
-already exists. The app reads and writes column E by position regardless
-of whether row 1 labels it, so this is cosmetic; nothing behaves
-differently either way.
+⚠️ **If your Sheet already has this tab**, run `addMissingColumns` (or add
+the `DestinationAccount` column by hand) for clarity — `setUpTrackerSheet`
+never touches a tab that already exists. The app reads and writes column E
+by position regardless of whether row 1 labels it, so this is cosmetic;
+nothing behaves differently either way.
 
 **Tab `Settings`**
 | Key | Value |

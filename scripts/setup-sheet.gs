@@ -15,6 +15,17 @@
  * alone -- no headers rewritten, no formats changed, no rows touched. Only
  * missing tabs are created, so this can't disturb data already in the Sheet.
  *
+ * A Sheet already in use before one of this file's later columns existed
+ * (e.g. `FundedBySavings` on PriceHistory) is exactly the case
+ * setUpTrackerSheet leaves alone, on purpose -- it only creates whole
+ * missing tabs. Run `checkTrackerSheet` to see which tabs are missing a
+ * column, then `addMissingColumns` to add just those: it only ever fills
+ * in a header cell that's still blank (never overwrites one, and never
+ * touches a data row), so it's safe to run on a Sheet with real data in
+ * it -- and it also fixes up the plain-text formatting on a text column
+ * that already existed but never got it, which matters for FundedBySavings
+ * in particular (see the comment on that column below).
+ *
  * See SETUP.md for what each tab means.
  */
 
@@ -47,7 +58,18 @@ var TABS = [
       'Date', 'Store', 'MasterItemName', 'Category', 'Price', 'Quantity', 'ID', 'Discount',
       'FundedBySavings',
     ],
-    textColumns: [1, 7], // Date, ID
+    // Date, ID, and FundedBySavings. FundedBySavings needs this for a
+    // different reason than the date-reformatting problem above: the
+    // controller writes the literal string "TRUE" (or "") here, but on an
+    // unformatted cell the Sheets API's USER_ENTERED input parses "TRUE"
+    // the same as if it had been typed into the UI -- into an actual
+    // Boolean cell, not the three-letter string. Read back with
+    // UNFORMATTED_VALUE, that comes back as the JS boolean `true`, and
+    // `row[8] === "TRUE"` in client.ts is then always false, silently
+    // undoing the fix this column exists for. Plain-text formatting is
+    // what keeps it a literal string end to end, same fix as the Date/ID
+    // columns just for a different failure mode.
+    textColumns: [1, 7, 9],
   },
   {
     // A line paid straight from the savings account isn't a recorded
@@ -254,6 +276,78 @@ function checkTrackerSheet() {
   var summary = problems.length
     ? 'Found ' + problems.length + ' thing(s) to fix:\n\n- ' + problems.join('\n- ')
     : 'All ten tabs are present and every dated column reads back in the format the app expects.';
+
+  Logger.log(summary);
+  SpreadsheetApp.getUi().alert(summary);
+}
+
+/**
+ * Adds whichever header columns a tab is missing compared to this file's
+ * own TABS list -- the columns SETUP.md otherwise asks you to type in by
+ * hand on a Sheet that predates them (Discount, ID, RecurringGroupKey,
+ * LastBilledCycle, DestinationAccount, FundedBySavings, ...). Also
+ * (re-)applies plain-text formatting to every column in a tab's
+ * `textColumns`, even ones that already had a header -- a column added by
+ * hand before this function existed may never have gotten that
+ * formatting, and for FundedBySavings in particular that matters: an
+ * unformatted cell lets the Sheets API's USER_ENTERED parsing turn a
+ * literal "TRUE" into an actual Boolean, which the controller's
+ * `row[8] === "TRUE"` check then silently reads as false (see the comment
+ * on PriceHistory's textColumns above).
+ *
+ * Only ever fills in a header cell that's currently blank -- a column
+ * whose header cell already holds something else (a typo, or a column of
+ * your own the app doesn't know about) is left exactly as it is; that's
+ * `checkTrackerSheet`'s job to flag, not this function's to guess at. No
+ * data row is ever touched, and reformatting a column changes only how
+ * cells display and how *future* entries are parsed -- it cannot retroactively
+ * fix a cell some other tool already turned into a real Boolean or number.
+ * Safe to run more than once.
+ */
+function addMissingColumns() {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var added = [];
+  var upToDate = [];
+  var missingTabs = [];
+
+  TABS.forEach(function (tab) {
+    var sheet = spreadsheet.getSheetByName(tab.name);
+    if (!sheet) {
+      missingTabs.push(tab.name);
+      return;
+    }
+
+    var currentWidth = Math.max(sheet.getLastColumn(), 1);
+    var currentHeaders = sheet.getRange(1, 1, 1, currentWidth).getDisplayValues()[0];
+    var addedHere = [];
+
+    tab.headers.forEach(function (header, index) {
+      var column = index + 1;
+      var existing = column <= currentHeaders.length ? String(currentHeaders[column - 1]).trim() : '';
+      if (existing !== '' && existing !== header) return; // something else lives here -- never overwrite it
+
+      if (existing === '') {
+        sheet.getRange(1, column).setValue(header).setFontWeight('bold');
+        addedHere.push(header);
+      }
+      if (tab.textColumns.indexOf(column) !== -1) {
+        sheet.getRange(2, column, sheet.getMaxRows() - 1, 1).setNumberFormat('@');
+      }
+    });
+
+    if (addedHere.length) {
+      added.push(tab.name + ': ' + addedHere.join(', '));
+    } else {
+      upToDate.push(tab.name);
+    }
+  });
+
+  var summary =
+    'Added: ' + (added.length ? added.join(' | ') : '(none)') + '\n' +
+    'Already up to date: ' + (upToDate.length ? upToDate.join(', ') : '(none)') +
+    (missingTabs.length
+      ? '\n\nMissing entirely, run setUpTrackerSheet first: ' + missingTabs.join(', ')
+      : '');
 
   Logger.log(summary);
   SpreadsheetApp.getUi().alert(summary);

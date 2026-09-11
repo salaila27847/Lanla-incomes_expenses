@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSavingsMovements, groupMovementsByDate } from "../src/pages/SavingsQR";
+import { buildSavingsMovements, groupMovementsByDate, pendingTotalsByCategory } from "../src/pages/SavingsQR";
 
 function income(id: string, date: string, amount: number) {
   return {
@@ -19,6 +19,25 @@ function withdrawal(id: string, date: string, amount: number) {
     category: "goods" as const,
     amount,
     confirmedAt: "2026-08-01T00:00:00.000Z",
+  };
+}
+
+function pendingItem(
+  id: string,
+  category: "food" | "goods",
+  price: number,
+  { quantity = 1, discount = 0 }: { quantity?: number; discount?: number } = {},
+) {
+  return {
+    id,
+    date: "2026-08-10",
+    store: null,
+    masterItemName: `item-${id}`,
+    category,
+    price,
+    quantity,
+    discount,
+    createdAt: "2026-08-10T00:00:00.000Z",
   };
 }
 
@@ -76,5 +95,41 @@ describe("groupMovementsByDate", () => {
         ],
       },
     ]);
+  });
+});
+
+describe("pendingTotalsByCategory", () => {
+  it("returns nothing for an empty list", () => {
+    expect(pendingTotalsByCategory([])).toEqual([]);
+  });
+
+  it("sums line totals within a category", () => {
+    const items = [
+      pendingItem("a", "food", 194.25),
+      pendingItem("b", "food", 162, { quantity: 6 }),
+    ];
+
+    expect(pendingTotalsByCategory(items)).toEqual([{ category: "food", total: 1166.25 }]);
+  });
+
+  it("keeps food and goods apart, food first", () => {
+    const items = [pendingItem("a", "goods", 89), pendingItem("b", "food", 120)];
+
+    expect(pendingTotalsByCategory(items)).toEqual([
+      { category: "food", total: 120 },
+      { category: "goods", total: 89 },
+    ]);
+  });
+
+  it("nets a bill-level discount into its own category's total", () => {
+    const items = [pendingItem("a", "food", 120), pendingItem("b", "food", 0, { discount: 33 })];
+
+    expect(pendingTotalsByCategory(items)).toEqual([{ category: "food", total: 87 }]);
+  });
+
+  it("omits a category with no pending items", () => {
+    const items = [pendingItem("a", "food", 120)];
+
+    expect(pendingTotalsByCategory(items).map((t) => t.category)).toEqual(["food"]);
   });
 });

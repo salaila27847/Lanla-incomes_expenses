@@ -67,6 +67,29 @@ function pendingLineTotal(item: PendingSavingsItem): number {
   return item.price * item.quantity - item.discount;
 }
 
+const CATEGORY_LABELS: Record<ItemCategory, string> = { food: "ของกิน", goods: "ของใช้" };
+const CATEGORY_ICONS: Record<ItemCategory, string> = { food: "🍔", goods: "🧴" };
+
+interface CategoryTotal {
+  category: ItemCategory;
+  total: number;
+}
+
+/** Subtotals for the pending-settlement list, food and goods kept apart —
+ *  the list is otherwise one flat feed and a long one is hard to sanity-check
+ *  by eye. Only categories actually present are returned, food first. */
+export function pendingTotalsByCategory(items: PendingSavingsItem[]): CategoryTotal[] {
+  const totals: Record<ItemCategory, number> = { food: 0, goods: 0 };
+  const present: Record<ItemCategory, boolean> = { food: false, goods: false };
+  for (const item of items) {
+    totals[item.category] += pendingLineTotal(item);
+    present[item.category] = true;
+  }
+  return (["food", "goods"] as ItemCategory[])
+    .filter((category) => present[category])
+    .map((category) => ({ category, total: totals[category] }));
+}
+
 /** Savings-tagged income (in) and confirmed permanent withdrawals (out),
  *  merged into one newest-first timeline. A transfer-back-settled pending
  *  item isn't included here -- it nets the savings balance to unchanged,
@@ -317,6 +340,13 @@ export default function SavingsQR() {
           <p className="text-xs text-slate-500">
             จ่ายด้วยเงินออม KTB ตอนสแกนสลิป — ยังไม่นับเป็นรายจ่ายจนกว่าจะเลือกวิธียืนยันด้านล่าง
           </p>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
+            {pendingTotalsByCategory(pendingItems).map(({ category, total }) => (
+              <span key={category}>
+                {CATEGORY_ICONS[category]} {CATEGORY_LABELS[category]} รวม {formatMoney(total)} บาท
+              </span>
+            ))}
+          </div>
           <ul className="mt-2 divide-y divide-slate-800">
             {pendingItems.map((item) => (
               <li key={item.id} className="space-y-2 py-3 text-sm">

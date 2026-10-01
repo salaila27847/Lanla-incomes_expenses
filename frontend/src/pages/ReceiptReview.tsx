@@ -6,7 +6,7 @@ import MasterItemPicker, {
   type MatchCandidate,
 } from "../components/MasterItemPicker";
 import StorePicker from "../components/StorePicker";
-import { decodeSharedScan } from "../sharedScan";
+import { decodeSharedScanResult } from "../sharedScan";
 
 type ReceiptCategory = "food" | "goods";
 type PaidFrom = "spending" | "savings";
@@ -123,12 +123,13 @@ export default function ReceiptReview() {
     const param = searchParams.get("shared");
     if (param === null) return;
     navigate("/scan", { replace: true });
-    const shared = decodeSharedScan(param);
-    if (!shared) {
-      setErrorMessage("ลิงก์ที่แชร์มาไม่ถูกต้อง ลองแชร์ใหม่อีกครั้ง");
+    const result = decodeSharedScanResult(param);
+    if (!result.ok) {
+      setErrorMessage(`ลิงก์ที่แชร์มาไม่ถูกต้อง — ${result.reason}`);
       setStatus("error");
       return;
     }
+    const shared = result.scan;
     if (shared.kind === "slip") {
       setMode("slip");
       applySlipResult(shared.slip);

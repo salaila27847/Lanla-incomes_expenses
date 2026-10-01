@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { decodeSharedScan } from "../src/sharedScan";
+import { decodeSharedScan, decodeSharedScanResult } from "../src/sharedScan";
 
 // The controller encodes with Node's Buffer "base64url" — reproduced here
 // independently so the test doesn't just round-trip our own decoder.
@@ -114,22 +114,57 @@ describe("decodeSharedScan — malformed links", () => {
   });
 });
 
-describe("decodeSharedScan — strict atob", () => {
+describe("decodeSharedScan — independent of the browser's atob", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("restores base64url's dropped padding, for engines whose atob requires it", () => {
-    const realAtob = globalThis.atob;
-    vi.stubGlobal("atob", (input: string) => {
-      if (input.length % 4 !== 0) throw new DOMException("bad padding", "InvalidCharacterError");
-      return realAtob(input);
+  it("never calls atob, so engine differences can't break a link", () => {
+    vi.stubGlobal("atob", () => {
+      throw new Error("atob must not be used");
     });
     // Lengths chosen to need 0, 1 and 2 padding characters.
     for (const amount of [1, 12, 123]) {
-      const param = encode({ kind: "slip", amount });
-      const decoded = decodeSharedScan(param);
-      expect(decoded).toMatchObject({ kind: "slip", slip: { amount } });
+      expect(decodeSharedScan(encode({ kind: "slip", amount }))).toMatchObject({
+        kind: "slip",
+        slip: { amount },
+      });
     }
+  });
+
+  it("decodes Thai text across every padding length", () => {
+    for (let n = 0; n < 12; n++) {
+      const payee = "ร้าน".repeat(n) + "x".repeat(n % 3);
+      const decoded = decodeSharedScan(encode({ kind: "slip", amount: 1, payee }));
+      expect(decoded).toMatchObject({ slip: { payee: payee || null } });
+    }
+  });
+
+  it("accepts the standard alphabet and explicit padding too", () => {
+    const standard = Buffer.from(JSON.stringify({ kind: "slip", amount: 7 })).toString("base64");
+    expect(decodeSharedScan(standard)).toMatchObject({ slip: { amount: 7 } });
+  });
+});
+
+describe("decodeSharedScanResult — reasons shown on the phone", () => {
+  it("names a bad character and its position", () => {
+    const result = decodeSharedScanResult("eyJr!W5k");
+    expect(result).toMatchObject({ ok: false });
+    expect(!result.ok && result.reason).toContain('"!" ที่ตำแหน่ง 4');
+  });
+
+  it("reports a link cut short, with its length", () => {
+    const full = encode({ kind: "slip", amount: 55, payee: "ร้านถุงเงิน" });
+    const result = decodeSharedScanResult(full.slice(0, 40));
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.reason).toMatch(/ไม่ครบ/);
+    expect(!result.ok && result.reason).toContain("ความยาวลิงก์ 40");
+  });
+
+  it("names the malformed receipt line", () => {
+    const result = decodeSharedScanResult(
+      encode({ kind: "receipt", items: [{ raw_text: "a", price: 1 }, { raw_text: "b" }] }),
+    );
+    expect(!result.ok && result.reason).toContain("รายการที่ 2");
   });
 });

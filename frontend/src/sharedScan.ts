@@ -80,7 +80,11 @@ export function decodeSharedScan(param: string | null): SharedScan | null {
   let parsed: unknown;
   try {
     const base64 = param.replace(/-/g, "+").replace(/_/g, "/");
-    const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+    // base64url drops the trailing "=" padding. Some engines' atob accept
+    // that and some don't — Node's does, so tests pass while Safari on the
+    // iPhone rejected a real shared receipt link. Restoring it works in both.
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    const bytes = Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
     parsed = JSON.parse(new TextDecoder().decode(bytes));
   } catch {
     return null;

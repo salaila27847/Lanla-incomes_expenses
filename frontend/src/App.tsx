@@ -24,9 +24,9 @@ export default function App() {
   const isWide = pathname === "/";
 
   // The iOS Shortcut opens the root (the one path every static host serves
-  // without an SPA rewrite) with ?slip=...; that belongs to the scan page.
+  // without an SPA rewrite) with ?shared=...; that belongs to the scan page.
   useEffect(() => {
-    if (pathname === "/" && new URLSearchParams(search).has("slip")) {
+    if (pathname === "/" && new URLSearchParams(search).has("shared")) {
       navigate(`/scan${search}`, { replace: true });
     }
   }, [pathname, search, navigate]);

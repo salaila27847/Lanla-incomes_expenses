@@ -6,7 +6,7 @@ import MasterItemPicker, {
   type MatchCandidate,
 } from "../components/MasterItemPicker";
 import StorePicker from "../components/StorePicker";
-import { decodeSharedSlip } from "../sharedSlip";
+import { decodeSharedScan } from "../sharedScan";
 
 type ReceiptCategory = "food" | "goods";
 type PaidFrom = "spending" | "savings";
@@ -116,21 +116,26 @@ export default function ReceiptReview() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
-  // Arrived from the iOS Shortcut (see sharedSlip.ts): the slip is already
-  // scanned, so go straight to slip review. The parameter is dropped from
-  // the URL right away so a reload doesn't start the same slip over.
+  // Arrived from the iOS Shortcut (see sharedScan.ts): the image is already
+  // scanned, so go straight to review. The parameter is dropped from the
+  // URL right away so a reload doesn't start the same scan over.
   useEffect(() => {
-    const param = searchParams.get("slip");
+    const param = searchParams.get("shared");
     if (param === null) return;
     navigate("/scan", { replace: true });
-    const shared = decodeSharedSlip(param);
+    const shared = decodeSharedScan(param);
     if (!shared) {
-      setErrorMessage("ลิงก์สลิปไม่ถูกต้อง ลองแชร์ใหม่อีกครั้ง");
+      setErrorMessage("ลิงก์ที่แชร์มาไม่ถูกต้อง ลองแชร์ใหม่อีกครั้ง");
       setStatus("error");
       return;
     }
-    setMode("slip");
-    applySlipResult(shared);
+    if (shared.kind === "slip") {
+      setMode("slip");
+      applySlipResult(shared.slip);
+    } else {
+      setMode("scan");
+      applyReceiptResult(shared.receipt);
+    }
     // Runs once per arrival: the navigate above empties searchParams.
   }, [searchParams]);
 
@@ -163,52 +168,63 @@ export default function ReceiptReview() {
       if (!response.ok) {
         throw new Error(`สแกนไม่สำเร็จ (${response.status})`);
       }
-      const result: ScanResponse = await response.json();
-      // Same "suggest a remembered name, fall back to the raw text" pattern
-      // as scan-slip below — see suggested_store on ScanResponse.
-      setStore(result.suggested_store ?? result.store);
-      setScannedStore(result.store);
-      setPurchasedAt(result.purchased_at ?? today());
-      if (result.master_items) setMasterItems(result.master_items);
-      setItems(
-        result.items.map((item) => ({
-          id: item.id,
-          rawText: item.raw_text,
-          price: String(item.price),
-          quantity: item.quantity ?? 1,
-          discount: item.discount ? String(item.discount) : "",
-          category: item.category ?? "food",
-          masterItemName: item.master_item_name ?? "",
-          candidates: item.candidates ?? [],
-          autoMatched: item.matched,
-          paidFrom: "spending",
-        })),
-      );
-      // A discount off the whole receipt belongs to no single product, so
-      // it gets its own line rather than being spread across the others —
-      // spreading it would corrupt every unit price on the bill.
-      if (result.bill_discount > 0) {
-        setItems((prev) => [
-          ...prev,
-          {
-            id: `bill-discount-${Date.now()}`,
-            rawText: "ส่วนลดท้ายบิล",
-            price: "0",
-            quantity: 1,
-            discount: String(result.bill_discount),
-            category: "food",
-            masterItemName: BILL_DISCOUNT_NAME,
-            candidates: [],
-            autoMatched: false,
-            paidFrom: "spending",
-          },
-        ]);
-      }
-      setStatus("reviewing");
+      applyReceiptResult(await response.json());
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ");
       setStatus("error");
     }
+  }
+
+  // `master_items` is optional: the shared-link path leaves it out of the
+  // URL, and the list fetched on mount is used instead.
+  function applyReceiptResult(
+    result: Omit<ScanResponse, "master_items"> & { master_items?: MasterItem[] },
+  ) {
+    setErrorMessage(null);
+    setSlipAmount(null);
+    setSlipPayee(null);
+    setSlipTransactionId(null);
+    // Same "suggest a remembered name, fall back to the raw text" pattern
+    // as scan-slip below — see suggested_store on ScanResponse.
+    setStore(result.suggested_store ?? result.store);
+    setScannedStore(result.store);
+    setPurchasedAt(result.purchased_at ?? today());
+    if (result.master_items) setMasterItems(result.master_items);
+    setItems(
+      result.items.map((item) => ({
+        id: item.id,
+        rawText: item.raw_text,
+        price: String(item.price),
+        quantity: item.quantity ?? 1,
+        discount: item.discount ? String(item.discount) : "",
+        category: item.category ?? "food",
+        masterItemName: item.master_item_name ?? "",
+        candidates: item.candidates ?? [],
+        autoMatched: item.matched,
+        paidFrom: "spending",
+      })),
+    );
+    // A discount off the whole receipt belongs to no single product, so
+    // it gets its own line rather than being spread across the others —
+    // spreading it would corrupt every unit price on the bill.
+    if (result.bill_discount > 0) {
+      setItems((prev) => [
+        ...prev,
+        {
+          id: `bill-discount-${Date.now()}`,
+          rawText: "ส่วนลดท้ายบิล",
+          price: "0",
+          quantity: 1,
+          discount: String(result.bill_discount),
+          category: "food",
+          masterItemName: BILL_DISCOUNT_NAME,
+          candidates: [],
+          autoMatched: false,
+          paidFrom: "spending",
+        },
+      ]);
+    }
+    setStatus("reviewing");
   }
 
   // No line items yet — a slip carries no product list, only who was paid

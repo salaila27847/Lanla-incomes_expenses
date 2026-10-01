@@ -273,12 +273,11 @@ describe("POST /receipt/scan-slip", () => {
 });
 
 /**
- * The iOS Shortcut path into slip review. iOS Safari has no Web Share
- * Target, so the Shortcut uploads here and opens the link it gets back.
- * It's the one route meant to be called from outside the PWA, hence the
- * shared secret.
+ * The iOS Shortcut path into review. iOS Safari has no Web Share Target,
+ * so the Shortcut uploads here and opens the link it gets back. It's the
+ * one route meant to be called from outside the PWA, hence the secret.
  */
-describe("POST /receipt/share-slip", () => {
+describe("POST /receipt/share", () => {
   const TOKEN = "s3cret-token";
   const SLIP = {
     payee: "ร้านถุงเงิน (นายเบิร์ด)",
@@ -294,12 +293,20 @@ describe("POST /receipt/share-slip", () => {
     return built;
   }
 
+  function decodeOpenUrl(openUrl: string) {
+    const url = new URL(openUrl);
+    return {
+      base: `${url.origin}${url.pathname}`,
+      shared: JSON.parse(Buffer.from(url.searchParams.get("shared")!, "base64url").toString()),
+    };
+  }
+
   it("is off until a token and app URL are configured", async () => {
     const { app } = await buildShareApp({ token: "" });
     stubBackend({ slip: { body: SLIP } });
 
     const response = await request(app)
-      .post("/receipt/share-slip")
+      .post("/receipt/share")
       .set("Authorization", "Bearer ")
       .attach("image", Buffer.from("jpeg"), "slip.jpg");
 
@@ -311,10 +318,10 @@ describe("POST /receipt/share-slip", () => {
     const calls = stubBackend({ slip: { body: SLIP } });
 
     const missing = await request(app)
-      .post("/receipt/share-slip")
+      .post("/receipt/share")
       .attach("image", Buffer.from("jpeg"), "slip.jpg");
     const wrong = await request(app)
-      .post("/receipt/share-slip")
+      .post("/receipt/share")
       .set("Authorization", "Bearer nope")
       .attach("image", Buffer.from("jpeg"), "slip.jpg");
 
@@ -323,33 +330,85 @@ describe("POST /receipt/share-slip", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("returns a link to the app root carrying the scan result", async () => {
+  it("rejects an unknown kind", async () => {
+    const { app } = await buildShareApp();
+    stubBackend({});
+
+    const response = await request(app)
+      .post("/receipt/share")
+      .set("Authorization", `Bearer ${TOKEN}`)
+      .field("kind", "invoice")
+      .attach("image", Buffer.from("jpeg"), "slip.jpg");
+
+    expect(response.status).toBe(400);
+  });
+
+  it("scans a slip by default and links to the app root with the result", async () => {
     const { app, sheets } = await buildShareApp();
     await sheets.upsertSlipPayeeMapping("ร้านถุงเงิน (นายเบิร์ด)", "ร้านลุงเบิร์ด");
     stubBackend({ slip: { body: SLIP } });
 
     const response = await request(app)
-      .post("/receipt/share-slip")
+      .post("/receipt/share")
       .set("Authorization", `Bearer ${TOKEN}`)
       .attach("image", Buffer.from("jpeg"), "slip.jpg");
 
     expect(response.status).toBe(200);
-    const url = new URL(response.body.open_url);
-    expect(`${url.origin}${url.pathname}`).toBe("https://app.test/");
-    const decoded = JSON.parse(Buffer.from(url.searchParams.get("slip")!, "base64url").toString());
-    expect(decoded).toEqual({ ...SLIP, suggested_store: "ร้านลุงเบิร์ด" });
+    const { base, shared } = decodeOpenUrl(response.body.open_url);
+    expect(base).toBe("https://app.test/");
+    expect(shared).toEqual({ kind: "slip", ...SLIP, suggested_store: "ร้านลุงเบิร์ด" });
   });
 
-  it("surfaces a slip OCR backend failure as 502", async () => {
-    const { app } = await buildShareApp();
-    stubBackend({ slip: { status: 500, body: {} } });
+  it("scans an itemised receipt, leaving the master item list out of the link", async () => {
+    const { app, sheets } = await buildShareApp();
+    await sheets.appendMasterItem("นมสด UHT 250ml", "food");
+    stubBackend({
+      ocr: {
+        body: {
+          store: "7-Eleven",
+          purchased_at: "2026-10-01",
+          items: [{ id: "1", raw_text: "นมสดUHT250ml", price: 15, quantity: 2, discount: 0 }],
+        },
+      },
+      match: () => ({
+        body: {
+          matched: true,
+          master_item_name: "นมสด UHT 250ml",
+          score: 92,
+          candidates: [{ name: "นมสด UHT 250ml", score: 92 }],
+        },
+      }),
+    });
 
     const response = await request(app)
-      .post("/receipt/share-slip")
+      .post("/receipt/share")
       .set("Authorization", `Bearer ${TOKEN}`)
-      .attach("image", Buffer.from("jpeg"), "slip.jpg");
+      .field("kind", "receipt")
+      .attach("image", Buffer.from("jpeg"), "receipt.jpg");
 
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(200);
+    const { shared } = decodeOpenUrl(response.body.open_url);
+    expect(shared).toMatchObject({
+      kind: "receipt",
+      store: "7-Eleven",
+      purchased_at: "2026-10-01",
+      items: [{ raw_text: "นมสดUHT250ml", price: 15, quantity: 2, master_item_name: "นมสด UHT 250ml", category: "food" }],
+    });
+    expect(shared).not.toHaveProperty("master_items");
+  });
+
+  it("surfaces an OCR backend failure as 502", async () => {
+    const { app } = await buildShareApp();
+    stubBackend({ slip: { status: 500, body: {} }, ocr: { status: 500, body: {} } });
+
+    for (const kind of ["slip", "receipt"]) {
+      const response = await request(app)
+        .post("/receipt/share")
+        .set("Authorization", `Bearer ${TOKEN}`)
+        .field("kind", kind)
+        .attach("image", Buffer.from("jpeg"), "x.jpg");
+      expect(response.status).toBe(502);
+    }
   });
 });
 

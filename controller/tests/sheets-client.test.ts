@@ -979,3 +979,33 @@ describe("slip payees", () => {
     expect(await client.findStoreForPayee("ร้านถุงเงิน")).toBeNull();
   });
 });
+
+/**
+ * USER_ENTERED writes on a column that isn't plain text turn "2026-10"
+ * into a date and "false" into a Boolean. LastBilledCycle and Active on a
+ * RecurringBills tab that predates them are exactly that, and misreading
+ * either broke recurring-bill generation on the real Sheet.
+ */
+describe("cell coercion on recurring-bill columns", () => {
+  it("reads a date-parsed cycle key back as YYYY-MM", async () => {
+    const { toCycleKey } = await loadClient();
+
+    // 46296 = 2026-10-01, 46023 = 2026-01-01 (days since 1899-12-30).
+    expect(toCycleKey(46296)).toBe("2026-10");
+    expect(toCycleKey(46023)).toBe("2026-01");
+    expect(toCycleKey("2026-10")).toBe("2026-10");
+    expect(toCycleKey("")).toBeNull();
+    expect(toCycleKey(undefined)).toBeNull();
+  });
+
+  it("treats a Boolean FALSE cell as inactive, and blank as active", async () => {
+    const { toActive } = await loadClient();
+
+    expect(toActive(false)).toBe(false);
+    expect(toActive("false")).toBe(false);
+    expect(toActive("FALSE")).toBe(false);
+    expect(toActive(true)).toBe(true);
+    expect(toActive("true")).toBe(true);
+    expect(toActive(undefined)).toBe(true);
+  });
+});

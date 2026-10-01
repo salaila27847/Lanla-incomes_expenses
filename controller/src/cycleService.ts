@@ -8,6 +8,17 @@
 import { buildCycleRange, cycleForDate, type Cycle } from "./cycles";
 import { readCycleRows, upsertCycleRow, type CycleRow } from "./sheets/client";
 
+/**
+ * Today's date where the user lives, as YYYY-MM-DD.
+ *
+ * `toISOString()` is UTC, seven hours behind Bangkok — so on payday the
+ * app kept showing the old cycle (and didn't generate the new cycle's
+ * recurring bills) until 07:00.
+ */
+export function today(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok" }).format(new Date());
+}
+
 export async function loadCycles(fromKey: string, toKey: string): Promise<Cycle[]> {
   const rows = await readCycleRows();
   return buildCycleRange(

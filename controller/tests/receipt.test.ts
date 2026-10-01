@@ -272,6 +272,87 @@ describe("POST /receipt/scan-slip", () => {
   });
 });
 
+/**
+ * The iOS Shortcut path into slip review. iOS Safari has no Web Share
+ * Target, so the Shortcut uploads here and opens the link it gets back.
+ * It's the one route meant to be called from outside the PWA, hence the
+ * shared secret.
+ */
+describe("POST /receipt/share-slip", () => {
+  const TOKEN = "s3cret-token";
+  const SLIP = {
+    payee: "ร้านถุงเงิน (นายเบิร์ด)",
+    purchased_at: "2026-10-01",
+    amount: 55.5,
+    transaction_id: "abc123",
+  };
+
+  async function buildShareApp(env: { token?: string; appUrl?: string } = {}) {
+    const built = await buildApp();
+    vi.stubEnv("SHARE_SLIP_TOKEN", env.token ?? TOKEN);
+    vi.stubEnv("APP_URL", env.appUrl ?? "https://app.test/");
+    return built;
+  }
+
+  it("is off until a token and app URL are configured", async () => {
+    const { app } = await buildShareApp({ token: "" });
+    stubBackend({ slip: { body: SLIP } });
+
+    const response = await request(app)
+      .post("/receipt/share-slip")
+      .set("Authorization", "Bearer ")
+      .attach("image", Buffer.from("jpeg"), "slip.jpg");
+
+    expect(response.status).toBe(503);
+  });
+
+  it("rejects a missing or wrong token without calling OCR", async () => {
+    const { app } = await buildShareApp();
+    const calls = stubBackend({ slip: { body: SLIP } });
+
+    const missing = await request(app)
+      .post("/receipt/share-slip")
+      .attach("image", Buffer.from("jpeg"), "slip.jpg");
+    const wrong = await request(app)
+      .post("/receipt/share-slip")
+      .set("Authorization", "Bearer nope")
+      .attach("image", Buffer.from("jpeg"), "slip.jpg");
+
+    expect(missing.status).toBe(401);
+    expect(wrong.status).toBe(401);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("returns a link to the app root carrying the scan result", async () => {
+    const { app, sheets } = await buildShareApp();
+    await sheets.upsertSlipPayeeMapping("ร้านถุงเงิน (นายเบิร์ด)", "ร้านลุงเบิร์ด");
+    stubBackend({ slip: { body: SLIP } });
+
+    const response = await request(app)
+      .post("/receipt/share-slip")
+      .set("Authorization", `Bearer ${TOKEN}`)
+      .attach("image", Buffer.from("jpeg"), "slip.jpg");
+
+    expect(response.status).toBe(200);
+    const url = new URL(response.body.open_url);
+    expect(`${url.origin}${url.pathname}`).toBe("https://app.test/");
+    const decoded = JSON.parse(Buffer.from(url.searchParams.get("slip")!, "base64url").toString());
+    expect(decoded).toEqual({ ...SLIP, suggested_store: "ร้านลุงเบิร์ด" });
+  });
+
+  it("surfaces a slip OCR backend failure as 502", async () => {
+    const { app } = await buildShareApp();
+    stubBackend({ slip: { status: 500, body: {} } });
+
+    const response = await request(app)
+      .post("/receipt/share-slip")
+      .set("Authorization", `Bearer ${TOKEN}`)
+      .attach("image", Buffer.from("jpeg"), "slip.jpg");
+
+    expect(response.status).toBe(502);
+  });
+});
+
 describe("POST /receipt/confirm", () => {
   const confirmBody = {
     store: "7-Eleven",

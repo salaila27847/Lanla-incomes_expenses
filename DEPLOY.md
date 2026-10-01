@@ -27,6 +27,7 @@ Before starting: finish `SETUP.md` (the Google Sheet + service account) first, a
    - `SHEETS_SPREADSHEET_ID`
    - `SHEETS_MOCK_MODE=false`
    - `PYTHON_BACKEND_URL` = the backend URL from step 1
+   - Optional, for sharing slips in from the iPhone share sheet: `SHARE_SLIP_TOKEN` (a long random secret) and `APP_URL` (the frontend URL from step 3 — fill it in after that deploy, then redeploy). See `SHORTCUT.md`.
 3. Deploy. Copy this URL too — you'll need it in step 3.
 
 ## 3. Frontend (React PWA)

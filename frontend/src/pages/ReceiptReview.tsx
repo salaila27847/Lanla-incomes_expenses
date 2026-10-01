@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { amountOr0, formatMoney, parseAmount } from "../money";
 import MasterItemPicker, {
   type MasterItem,
   type MatchCandidate,
 } from "../components/MasterItemPicker";
 import StorePicker from "../components/StorePicker";
+import { decodeSharedSlip } from "../sharedSlip";
 
 type ReceiptCategory = "food" | "goods";
 type PaidFrom = "spending" | "savings";
@@ -111,6 +113,26 @@ export default function ReceiptReview() {
   // from a scan" as much as "not scanned yet".
   const [scannedStore, setScannedStore] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+
+  // Arrived from the iOS Shortcut (see sharedSlip.ts): the slip is already
+  // scanned, so go straight to slip review. The parameter is dropped from
+  // the URL right away so a reload doesn't start the same slip over.
+  useEffect(() => {
+    const param = searchParams.get("slip");
+    if (param === null) return;
+    navigate("/scan", { replace: true });
+    const shared = decodeSharedSlip(param);
+    if (!shared) {
+      setErrorMessage("ลิงก์สลิปไม่ถูกต้อง ลองแชร์ใหม่อีกครั้ง");
+      setStatus("error");
+      return;
+    }
+    setMode("slip");
+    applySlipResult(shared);
+    // Runs once per arrival: the navigate above empties searchParams.
+  }, [searchParams]);
 
   useEffect(() => {
     fetch(`${API_BASE_URL}/receipt/master-items`)
@@ -189,6 +211,21 @@ export default function ReceiptReview() {
     }
   }
 
+  // No line items yet — a slip carries no product list, only who was paid
+  // and how much. The user builds the items below until they add up to
+  // slipAmount; see the reconciliation gate on canSave.
+  function applySlipResult(result: SlipScanResponse) {
+    setErrorMessage(null);
+    setStore(result.suggested_store ?? result.payee);
+    setPurchasedAt(result.purchased_at ?? today());
+    setSlipAmount(result.amount);
+    setSlipPayee(result.payee);
+    setSlipTransactionId(result.transaction_id);
+    setScannedStore(null);
+    setItems([]);
+    setStatus("reviewing");
+  }
+
   async function handleSlipFileSelected(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -207,17 +244,7 @@ export default function ReceiptReview() {
       if (!response.ok) {
         throw new Error(`สแกนไม่สำเร็จ (${response.status})`);
       }
-      const result: SlipScanResponse = await response.json();
-      // No line items yet — a slip carries no product list, only who was
-      // paid and how much. The user builds the items below until they add
-      // up to slipAmount; see the reconciliation gate on canSave.
-      setStore(result.suggested_store ?? result.payee);
-      setPurchasedAt(result.purchased_at ?? today());
-      setSlipAmount(result.amount);
-      setSlipPayee(result.payee);
-      setSlipTransactionId(result.transaction_id);
-      setItems([]);
-      setStatus("reviewing");
+      applySlipResult(await response.json());
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ");
       setStatus("error");

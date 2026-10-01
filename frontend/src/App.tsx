@@ -1,4 +1,5 @@
-import { NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { useEffect } from "react";
+import { NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import ReceiptReview from "./pages/ReceiptReview";
 import PriceHistory from "./pages/PriceHistory";
 import Budget from "./pages/Budget";
@@ -18,8 +19,17 @@ const NAV_ITEMS = [
 export default function App() {
   // Every page is a single mobile column except the dashboard, whose table
   // is twelve pay-cycle columns wide and needs the room.
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
+  const navigate = useNavigate();
   const isWide = pathname === "/";
+
+  // The iOS Shortcut opens the root (the one path every static host serves
+  // without an SPA rewrite) with ?shared=...; that belongs to the scan page.
+  useEffect(() => {
+    if (pathname === "/" && new URLSearchParams(search).has("shared")) {
+      navigate(`/scan${search}`, { replace: true });
+    }
+  }, [pathname, search, navigate]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">

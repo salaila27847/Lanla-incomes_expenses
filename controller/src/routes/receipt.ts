@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { Router } from "express";
 import multer from "multer";
 import { env } from "../env";
@@ -11,6 +12,7 @@ import {
   readPriceHistory,
   upsertSlipPayeeMapping,
   type ItemCategory,
+  type MasterItem,
 } from "../sheets/client";
 
 export const receiptRouter = Router();
@@ -62,19 +64,26 @@ interface ScanResponseItem extends OcrItem {
 // Scan: OCR the receipt, then fuzzy-match every line against the current
 // master item list, and hand the annotated result to the PWA for review.
 // Nothing is written to Sheets yet — that happens on /confirm.
-receiptRouter.post("/scan", upload.single("image"), async (req, res) => {
-  if (!req.file) {
-    res.status(400).json({ error: "image file is required" });
-    return;
-  }
+type ScanOutcome<T> = { ok: true; body: T } | { ok: false; status: number; error: string };
 
+interface ReceiptScanResult {
+  store: string | null;
+  suggested_store: string | null;
+  purchased_at: string | null;
+  items: ScanResponseItem[];
+  bill_discount: number;
+  master_items: MasterItem[];
+}
+
+// Shared by /scan (the PWA's own upload) and /share (an iOS Shortcut).
+async function scanReceipt(file: Express.Multer.File): Promise<ScanOutcome<ReceiptScanResult>> {
   const ocrForm = new FormData();
   // Buffer's ArrayBufferLike can be a SharedArrayBuffer, which BlobPart
   // doesn't accept; copying into a plain Uint8Array sidesteps that.
   ocrForm.append(
     "image",
-    new Blob([new Uint8Array(req.file.buffer)], { type: req.file.mimetype }),
-    req.file.originalname,
+    new Blob([new Uint8Array(file.buffer)], { type: file.mimetype }),
+    file.originalname,
   );
 
   // fetch rejects rather than resolving when the backend isn't reachable
@@ -85,16 +94,16 @@ receiptRouter.post("/scan", upload.single("image"), async (req, res) => {
   try {
     ocrResponse = await fetch(`${PYTHON_BACKEND_URL}/ocr/`, { method: "POST", body: ocrForm });
   } catch (error) {
-    res.status(502).json({
+    return {
+      ok: false,
+      status: 502,
       error: `OCR backend unreachable at ${PYTHON_BACKEND_URL}: ${
         error instanceof Error ? error.message : String(error)
       }`,
-    });
-    return;
+    };
   }
   if (!ocrResponse.ok) {
-    res.status(502).json({ error: `OCR backend returned ${ocrResponse.status}` });
-    return;
+    return { ok: false, status: 502, error: `OCR backend returned ${ocrResponse.status}` };
   }
   const ocrResult = (await ocrResponse.json()) as OcrResponse;
 
@@ -148,14 +157,30 @@ receiptRouter.post("/scan", upload.single("image"), async (req, res) => {
 
   // The full list rides along so the picker can offer every master item
   // without a second round trip — they're already read above.
-  res.json({
-    store: ocrResult.store,
-    suggested_store: suggestedStore,
-    purchased_at: ocrResult.purchased_at,
-    items,
-    bill_discount: ocrResult.bill_discount ?? 0,
-    master_items: masterItems,
-  });
+  return {
+    ok: true,
+    body: {
+      store: ocrResult.store,
+      suggested_store: suggestedStore,
+      purchased_at: ocrResult.purchased_at,
+      items,
+      bill_discount: ocrResult.bill_discount ?? 0,
+      master_items: masterItems,
+    },
+  };
+}
+
+receiptRouter.post("/scan", upload.single("image"), async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ error: "image file is required" });
+    return;
+  }
+  const result = await scanReceipt(req.file);
+  if (!result.ok) {
+    res.status(result.status).json({ error: result.error });
+    return;
+  }
+  res.json(result.body);
 });
 
 /** The master item list on its own, for the manual-entry form. */
@@ -186,40 +211,122 @@ interface SlipOcrResponse {
 // with the slip's own date and a target total the entered lines have to
 // add up to. `suggested_store` is filled in when this payee has been
 // mapped to a store name before (see upsertSlipPayeeMapping on /confirm).
-receiptRouter.post("/scan-slip", upload.single("image"), async (req, res) => {
-  if (!req.file) {
-    res.status(400).json({ error: "image file is required" });
-    return;
-  }
-
+// Shared by /scan-slip (the PWA's own upload) and /share (an iOS
+// Shortcut). Returns the response body, or an error status + message.
+async function scanSlip(
+  file: Express.Multer.File,
+): Promise<ScanOutcome<SlipScanResult>> {
   const ocrForm = new FormData();
   ocrForm.append(
     "image",
-    new Blob([new Uint8Array(req.file.buffer)], { type: req.file.mimetype }),
-    req.file.originalname,
+    new Blob([new Uint8Array(file.buffer)], { type: file.mimetype }),
+    file.originalname,
   );
 
   let ocrResponse: Response;
   try {
     ocrResponse = await fetch(`${PYTHON_BACKEND_URL}/ocr/slip`, { method: "POST", body: ocrForm });
   } catch (error) {
-    res.status(502).json({
+    return {
+      ok: false,
+      status: 502,
       error: `OCR backend unreachable at ${PYTHON_BACKEND_URL}: ${
         error instanceof Error ? error.message : String(error)
       }`,
-    });
-    return;
+    };
   }
   if (!ocrResponse.ok) {
-    res.status(502).json({ error: `OCR backend returned ${ocrResponse.status}` });
-    return;
+    return { ok: false, status: 502, error: `OCR backend returned ${ocrResponse.status}` };
   }
   const slip = (await ocrResponse.json()) as SlipOcrResponse;
 
-  res.json({
-    ...slip,
-    suggested_store: slip.payee ? await findStoreForPayee(slip.payee) : null,
-  });
+  return {
+    ok: true,
+    body: { ...slip, suggested_store: slip.payee ? await findStoreForPayee(slip.payee) : null },
+  };
+}
+
+interface SlipScanResult extends SlipOcrResponse {
+  suggested_store: string | null;
+}
+
+receiptRouter.post("/scan-slip", upload.single("image"), async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ error: "image file is required" });
+    return;
+  }
+  const result = await scanSlip(req.file);
+  if (!result.ok) {
+    res.status(result.status).json({ error: result.error });
+    return;
+  }
+  res.json(result.body);
+});
+
+// Constant-time, so response timing doesn't leak how much of a guess matched.
+function sameSecret(given: string, expected: string): boolean {
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+// Share: the same scans, for an iOS Shortcut in the Photos share sheet.
+// iOS Safari doesn't support the Web Share Target API, so a PWA can't be a
+// share destination itself; the Shortcut uploads the image here with
+// `kind` = "slip" (a transfer slip) or "receipt" (an itemised receipt) and
+// opens the returned `open_url`, which carries the scan result in its
+// query string so the PWA lands straight in review. Nothing is stored
+// server-side — the controller runs on stateless serverless functions.
+//
+// This is the one route meant to be called from outside the PWA, so it
+// takes a shared secret (SHARE_SLIP_TOKEN, sent as a Bearer token) and is
+// off entirely until one is configured.
+receiptRouter.post("/share", upload.single("image"), async (req, res) => {
+  const token = env("SHARE_SLIP_TOKEN");
+  const appUrl = env("APP_URL");
+  if (!token || !appUrl) {
+    res.status(503).json({ error: "share is not configured (SHARE_SLIP_TOKEN, APP_URL)" });
+    return;
+  }
+  if (!sameSecret(req.get("authorization") ?? "", `Bearer ${token}`)) {
+    res.status(401).json({ error: "invalid share token" });
+    return;
+  }
+  const kind = String(req.body?.kind ?? req.query.kind ?? "slip").trim();
+  if (kind !== "slip" && kind !== "receipt") {
+    res.status(400).json({ error: 'kind must be "slip" or "receipt"' });
+    return;
+  }
+  if (!req.file) {
+    res.status(400).json({ error: "image file is required" });
+    return;
+  }
+
+  let shared: Record<string, unknown>;
+  if (kind === "slip") {
+    const result = await scanSlip(req.file);
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+    shared = { kind, ...result.body };
+  } else {
+    const result = await scanReceipt(req.file);
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+    // The master item list is left out: it's the bulk of the response and
+    // the scan page fetches it on load anyway. Only the scan itself rides
+    // in the link.
+    const { master_items: _omitted, ...receipt } = result.body;
+    shared = { kind, ...receipt };
+  }
+
+  // Opened at the root, not /scan: the root is the one path every static
+  // host serves without an SPA rewrite. App.tsx forwards it to /scan.
+  const payload = Buffer.from(JSON.stringify(shared)).toString("base64url");
+  res.json({ ...shared, open_url: `${appUrl.replace(/\/+$/, "")}/?shared=${payload}` });
 });
 
 interface ConfirmedItem {

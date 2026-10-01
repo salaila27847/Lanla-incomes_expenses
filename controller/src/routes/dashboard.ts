@@ -8,6 +8,7 @@ import {
   isDate,
   type Cycle,
 } from "../cycles";
+import { today } from "../cycleService";
 import { loadSettings, saveSettings, SETTING_KEYS, type SettingField } from "../settings";
 import {
   lineTotal,
@@ -122,12 +123,11 @@ dashboardRouter.get("/", async (req, res) => {
 
   const keys = cycleKeysInYear(year);
   const savingsByKey = new Map(cycleRows.map((row) => [row.key, row.savingsBalance]));
-  const today = new Date().toISOString().slice(0, 10);
 
   res.json({
     year,
     cycles,
-    currentCycleKey: cycleForDate(today, cycles)?.key ?? null,
+    currentCycleKey: cycleForDate(today(), cycles)?.key ?? null,
     sections: [
       { id: "income", title: "รายรับ", rows: visibleRows(incomeBySource, keys) },
       { id: "fixed", title: "รายจ่ายคงที่ / บิล", rows: visibleRows(fixedByName, keys) },

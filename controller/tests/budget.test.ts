@@ -626,6 +626,40 @@ describe("recurring bills — generation on GET /budget", () => {
     expect(bills.find((b) => b.id === second.id)).toMatchObject({ installmentsRemaining: 5 });
   });
 
+  it("generates the next cycle's rows once payday passes", async () => {
+    const { app, sheets } = await buildApp();
+    await sheets.appendRecurringBill({ name: "ค่าเน็ต", amount: 590 });
+    const plan = await sheets.appendRecurringBill({
+      name: "ผ่อนโทรศัพท์",
+      amount: 1200,
+      installmentsRemaining: 5,
+    });
+    await request(app).get("/budget");
+
+    vi.setSystemTime(new Date("2026-09-01T09:00:00Z"));
+    const { body } = await request(app).get("/budget");
+
+    expect(body.cycle.key).toBe("2026-09");
+    expect(body.mustPay).toMatchObject([
+      { name: "ค่าเน็ต", amount: 590, month: "2026-09" },
+      { name: "ผ่อนโทรศัพท์", amount: 1200, month: "2026-09" },
+    ]);
+    const [, updated] = await sheets.readRecurringBills();
+    expect(updated).toMatchObject({ id: plan.id, installmentsRemaining: 3 });
+  });
+
+  it("starts the new cycle at midnight Bangkok time on payday, not 07:00", async () => {
+    const { app, sheets } = await buildApp();
+    await sheets.appendRecurringBill({ name: "ค่าเน็ต", amount: 590 });
+
+    // 06:00 on 27 Aug in Bangkok is still 26 Aug in UTC.
+    vi.setSystemTime(new Date("2026-08-26T23:00:00Z"));
+    const { body } = await request(app).get("/budget");
+
+    expect(body.cycle.key).toBe("2026-09");
+    expect(body.mustPay).toMatchObject([{ name: "ค่าเน็ต", month: "2026-09" }]);
+  });
+
   it("leaves a bill with no installment count recurring forever", async () => {
     const { app, sheets } = await buildApp();
     const bill = await sheets.appendRecurringBill({ name: "ค่าเช่า", amount: 4000 });

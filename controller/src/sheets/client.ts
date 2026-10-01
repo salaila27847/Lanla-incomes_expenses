@@ -28,7 +28,12 @@ function getSheetsClient() {
   return google.sheets({ version: "v4", auth });
 }
 
-async function readRange(range: string): Promise<unknown[][]> {
+type DateTimeRender = "FORMATTED_STRING" | "SERIAL_NUMBER";
+
+async function readRange(
+  range: string,
+  dateTimeRenderOption: DateTimeRender = "FORMATTED_STRING",
+): Promise<unknown[][]> {
   const sheets = getSheetsClient();
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
@@ -44,27 +49,41 @@ async function readRange(range: string): Promise<unknown[][]> {
     // (see scripts/setup-sheet.gs) are unaffected either way, since a
     // plain-text cell was never date-parsed to begin with.
     valueRenderOption: "UNFORMATTED_VALUE",
-    dateTimeRenderOption: "FORMATTED_STRING",
+    dateTimeRenderOption,
   });
   return response.data.values ?? [];
 }
 
-async function appendRow(range: string, values: unknown[]): Promise<void> {
+// RAW stores each value exactly as sent. USER_ENTERED (the default) parses
+// it the way typing into the UI would — which turns a cycle key like
+// "2026-10" into a date and "false" into a Boolean on any column that isn't
+// formatted as plain text. See the recurring-bill writes below.
+type ValueInput = "USER_ENTERED" | "RAW";
+
+async function appendRow(
+  range: string,
+  values: unknown[],
+  valueInputOption: ValueInput = "USER_ENTERED",
+): Promise<void> {
   const sheets = getSheetsClient();
   await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
     range,
-    valueInputOption: "USER_ENTERED",
+    valueInputOption,
     requestBody: { values: [values] },
   });
 }
 
-async function updateRange(range: string, values: unknown[]): Promise<void> {
+async function updateRange(
+  range: string,
+  values: unknown[],
+  valueInputOption: ValueInput = "USER_ENTERED",
+): Promise<void> {
   const sheets = getSheetsClient();
   await sheets.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,
     range,
-    valueInputOption: "USER_ENTERED",
+    valueInputOption,
     requestBody: { values: [values] },
   });
 }
@@ -82,9 +101,12 @@ async function updateRange(range: string, values: unknown[]): Promise<void> {
  * Writes deliberately still throw: a failed save must not look like it
  * worked.
  */
-async function readOptionalRange(range: string): Promise<unknown[][]> {
+async function readOptionalRange(
+  range: string,
+  dateTimeRenderOption: DateTimeRender = "FORMATTED_STRING",
+): Promise<unknown[][]> {
   try {
-    return await readRange(range);
+    return await readRange(range, dateTimeRenderOption);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!/unable to parse range/i.test(message)) throw error;
@@ -108,6 +130,30 @@ function toNumber(value: unknown): number {
   if (typeof value === "number") return value;
   const parsed = Number(String(value ?? "").replace(/,/g, "").trim());
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+// A cycle key (YYYY-MM) read with dateTimeRenderOption SERIAL_NUMBER.
+//
+// A key written into a column that isn't formatted as plain text gets
+// parsed into a date (the 1st of that month) — LastBilledCycle in
+// particular, which was added to an existing tab by hand with no
+// formatting. Read back as a display string ("1/10/2026", in whatever the
+// Sheet's locale is) it never equals the key it was written as, so the
+// bill looked never-billed on every page load and lost an instalment each
+// time. As a serial number (days since 1899-12-30) the month is exact.
+export function toCycleKey(value: unknown): string | null {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  if (typeof value !== "number") return String(value).trim();
+  const date = new Date(Date.UTC(1899, 11, 30) + Math.round(value) * 86_400_000);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+// UNFORMATTED_VALUE returns a Boolean cell as a real boolean — which is
+// what USER_ENTERED makes of a written "false". Comparing only against the
+// string "false" read every stopped or finished bill as still active.
+export function toActive(value: unknown): boolean {
+  if (value === false) return false;
+  return String(value ?? "").trim().toLowerCase() !== "false";
 }
 
 // Distinguishes "the user left this blank" from "the user entered 0" —
@@ -597,14 +643,16 @@ export async function readMustPayItems(): Promise<MustPayItem[]> {
   // Column G (recurringGroupKey) postdates the original six columns, so a
   // row written before it exists simply has nothing there — row[6] reads
   // as undefined, same blank-means-null handling as PaidAt.
-  const rows = await readRange("MustPay!A2:G");
+  // SERIAL_NUMBER so a Month cell that got date-parsed still reads back as
+  // its cycle key — see toCycleKey.
+  const rows = await readRange("MustPay!A2:G", "SERIAL_NUMBER");
   return rows
     .filter((row) => row[0])
     .map((row) => ({
       id: String(row[0]),
       name: String(row[1]),
       amount: toNumber(row[2]),
-      month: String(row[3]),
+      month: toCycleKey(row[3]) ?? "",
       status: row[4] === "paid" ? "paid" : "unpaid",
       paidAt: row[5] ? String(row[5]) : null,
       recurringGroupKey: row[6] ? String(row[6]) : null,
@@ -630,15 +678,11 @@ export async function appendMustPayItem(input: {
     mockMustPayItems.push(item);
     return item;
   }
-  await appendRow("MustPay!A:G", [
-    item.id,
-    item.name,
-    item.amount,
-    item.month,
-    item.status,
-    "",
-    item.recurringGroupKey ?? "",
-  ]);
+  await appendRow(
+    "MustPay!A:G",
+    [item.id, item.name, item.amount, item.month, item.status, "", item.recurringGroupKey ?? ""],
+    "RAW",
+  );
   return item;
 }
 
@@ -710,7 +754,7 @@ export async function readRecurringBills(): Promise<RecurringBill[]> {
   }
   // Column G (lastBilledCycle) postdates the original six columns, same
   // blank-means-null handling as MustPay's RecurringGroupKey.
-  const rows = await readOptionalRange("RecurringBills!A2:G");
+  const rows = await readOptionalRange("RecurringBills!A2:G", "SERIAL_NUMBER");
   return rows
     .filter((row) => row[0])
     .map((row) => ({
@@ -719,8 +763,8 @@ export async function readRecurringBills(): Promise<RecurringBill[]> {
       amount: toNumber(row[2]),
       cardGroup: row[3] ? String(row[3]) : null,
       installmentsRemaining: toOptionalNumber(row[4]),
-      active: row[5] !== "false",
-      lastBilledCycle: row[6] ? String(row[6]) : null,
+      active: toActive(row[5]),
+      lastBilledCycle: toCycleKey(row[6]),
     }));
 }
 
@@ -743,15 +787,11 @@ export async function appendRecurringBill(input: {
     mockRecurringBills.push(bill);
     return bill;
   }
-  await appendRow("RecurringBills!A:G", [
-    bill.id,
-    bill.name,
-    bill.amount,
-    bill.cardGroup ?? "",
-    bill.installmentsRemaining ?? "",
-    "true",
-    "",
-  ]);
+  await appendRow(
+    "RecurringBills!A:G",
+    [bill.id, bill.name, bill.amount, bill.cardGroup ?? "", bill.installmentsRemaining ?? "", true, ""],
+    "RAW",
+  );
   return bill;
 }
 
@@ -774,11 +814,14 @@ export async function updateRecurringBill(
 
   const rowNumber = await findRowNumber("RecurringBills!A2:A", id);
   if (rowNumber === null) return null;
-  await updateRange(`RecurringBills!E${rowNumber}:G${rowNumber}`, [
-    merged.installmentsRemaining ?? "",
-    String(merged.active),
-    merged.lastBilledCycle ?? "",
-  ]);
+  // RAW, so LastBilledCycle stays the literal "2026-10" whatever the
+  // column's format — this also repairs a cell an earlier write turned
+  // into a date.
+  await updateRange(
+    `RecurringBills!E${rowNumber}:G${rowNumber}`,
+    [merged.installmentsRemaining ?? "", merged.active, merged.lastBilledCycle ?? ""],
+    "RAW",
+  );
   return merged;
 }
 

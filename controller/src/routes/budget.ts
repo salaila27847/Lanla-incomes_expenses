@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { cycleContaining } from "../cycleService";
+import { cycleContaining, today } from "../cycleService";
 import { loadSettings } from "../settings";
 import {
   lineTotal,
@@ -17,10 +17,6 @@ import {
 } from "../sheets/client";
 
 export const budgetRouter = Router();
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
 
 // Turns each active RecurringBill into this cycle's MustPay row. Several
 // bills sharing a cardGroup collapse into one row (one card statement, not

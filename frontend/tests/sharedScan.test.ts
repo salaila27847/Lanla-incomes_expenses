@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { decodeSharedScan } from "../src/sharedScan";
 
 // The controller encodes with Node's Buffer "base64url" — reproduced here
@@ -111,5 +111,25 @@ describe("decodeSharedScan — malformed links", () => {
     expect(decodeSharedScan("not base64 json!!")).toBeNull();
     expect(decodeSharedScan(encode({ kind: "invoice", amount: 5 }))).toBeNull();
     expect(decodeSharedScan(encode({ amount: 5 }))).toBeNull();
+  });
+});
+
+describe("decodeSharedScan — strict atob", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("restores base64url's dropped padding, for engines whose atob requires it", () => {
+    const realAtob = globalThis.atob;
+    vi.stubGlobal("atob", (input: string) => {
+      if (input.length % 4 !== 0) throw new DOMException("bad padding", "InvalidCharacterError");
+      return realAtob(input);
+    });
+    // Lengths chosen to need 0, 1 and 2 padding characters.
+    for (const amount of [1, 12, 123]) {
+      const param = encode({ kind: "slip", amount });
+      const decoded = decodeSharedScan(param);
+      expect(decoded).toMatchObject({ kind: "slip", slip: { amount } });
+    }
   });
 });
